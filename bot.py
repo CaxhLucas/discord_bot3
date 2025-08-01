@@ -18,7 +18,7 @@ SSU_ROLE_ID = 1371272556820041854
 EVENT_ROLE_ID = 1371272556820041853
 ANNOUNCE_ROLE_ID = 1371272556820041852
 GIVEAWAY_ROLE_ID = 1400878647753048164
-REACTION_ROLE_CHANNEL_ID = 1371272557969281159  # (unused now, but kept)
+REACTION_ROLE_CHANNEL_ID = 1371272557969281159
 
 
 # === INTENTS AND BOT SETUP ===
@@ -132,7 +132,7 @@ class ReactionRole(commands.Cog):
     @app_commands.command(name="sendreactionroles", description="Send reaction roles panel")
     @is_bod()
     async def sendreactionroles(self, interaction: discord.Interaction):
-        view = ui.View()
+        view = ui.View(timeout=None)
         view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
         view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
         view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
@@ -144,13 +144,16 @@ class ReactionRole(commands.Cog):
             description="Click the buttons below to toggle your ping roles!",
             color=discord.Color.blurple()
         )
-        # Send buttons and embed directly to command user so they can see it immediately
-        await interaction.response.send_message(embed=embed, view=view)
+
+
+        channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
+        await channel.send(embed=embed, view=view)
+        await interaction.response.send_message("Reaction role panel sent!", ephemeral=True)
 
 
 
 
-# Button click event handler
+# === INTERACTION HANDLER ===
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
