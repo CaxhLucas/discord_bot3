@@ -53,14 +53,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="New Rank", value=new_rank)
         embed.add_field(name="Reason", value=reason)
         embed.add_field(name="Promoted By", value=interaction.user.mention)
-
-
         channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("Promotion channel not found!", ephemeral=True)
-            return
-
-
         await channel.send(embed=embed)
         await interaction.response.send_message("Promotion logged.", ephemeral=True)
 
@@ -75,14 +68,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Reason", value=reason)
         embed.add_field(name="Issued By", value=interaction.user.mention)
         embed.add_field(name="Expires", value=expires)
-
-
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("Infraction channel not found!", ephemeral=True)
-            return
-
-
         await channel.send(embed=embed)
         await interaction.response.send_message("Infraction logged.", ephemeral=True)
 
@@ -109,11 +95,6 @@ class ServerSession(commands.Cog):
         )
         role = interaction.guild.get_role(SSU_ROLE_ID)
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
-        if channel is None or role is None:
-            await interaction.response.send_message("Failed to find session channel or SSU role.", ephemeral=True)
-            return
-
-
         await channel.send(content=role.mention, embed=embed)
         await interaction.response.send_message("Session start announced!", ephemeral=True)
 
@@ -131,52 +112,8 @@ class ServerSession(commands.Cog):
             color=discord.Color.red()
         )
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("Failed to find the session channel.", ephemeral=True)
-            return
-
-
         await channel.send(embed=embed)
         await interaction.response.send_message("Shutdown announced.", ephemeral=True)
-
-
-# === PING COMMANDS COG ===
-class PingCommands(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-
-    @app_commands.command(name="announce", description="Ping announcement role")
-    @is_bod()
-    async def announce(self, interaction: discord.Interaction, message: str):
-        role = interaction.guild.get_role(ANNOUNCE_ROLE_ID)
-        if role is None:
-            await interaction.response.send_message("Announcement role not found.", ephemeral=True)
-            return
-        await interaction.channel.send(f"{role.mention} {message}")
-        await interaction.response.send_message("Announcement sent.", ephemeral=True)
-
-
-    @app_commands.command(name="event", description="Ping event role")
-    @is_bod()
-    async def event(self, interaction: discord.Interaction, message: str):
-        role = interaction.guild.get_role(EVENT_ROLE_ID)
-        if role is None:
-            await interaction.response.send_message("Event role not found.", ephemeral=True)
-            return
-        await interaction.channel.send(f"{role.mention} {message}")
-        await interaction.response.send_message("Event ping sent.", ephemeral=True)
-
-
-    @app_commands.command(name="giveaway", description="Ping giveaway role")
-    @is_bod()
-    async def giveaway(self, interaction: discord.Interaction, message: str):
-        role = interaction.guild.get_role(GIVEAWAY_ROLE_ID)
-        if role is None:
-            await interaction.response.send_message("Giveaway role not found.", ephemeral=True)
-            return
-        await interaction.channel.send(f"{role.mention} {message}")
-        await interaction.response.send_message("Giveaway ping sent.", ephemeral=True)
 
 
 # === REACTION ROLE COG ===
@@ -190,42 +127,41 @@ class ReactionRole(commands.Cog):
     async def sendreactionroles(self, interaction: discord.Interaction):
         view = ui.View()
         view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
-        view.add_item(ui.Button(label="Get Announcements", custom_id="announce_ping", style=discord.ButtonStyle.success))
-        view.add_item(ui.Button(label="Get Giveaways", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
+        view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
+        view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
+        view.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
 
 
-        embed = discord.Embed(title="🎌 Reaction Roles", description="Click the buttons to toggle roles!", color=discord.Color.blurple())
-        channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
-        if channel is None:
-            await interaction.response.send_message("Reaction role channel not found!", ephemeral=True)
-            return
-
-
-        await channel.send(embed=embed, view=view)
+        embed = discord.Embed(
+            title="🎌 Reaction Roles",
+            description="Click the buttons below to toggle your ping roles!",
+            color=discord.Color.blurple()
+        )
         await interaction.response.send_message("Reaction roles panel sent!", ephemeral=True)
+        channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
+        await channel.send(embed=embed, view=view)
 
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    if interaction.type != discord.InteractionType.component:
+    if not interaction.type == discord.InteractionType.component:
         return
     member = interaction.user
     guild = interaction.guild
     roles = {
         "event_ping": guild.get_role(EVENT_ROLE_ID),
         "announce_ping": guild.get_role(ANNOUNCE_ROLE_ID),
-        "giveaway_ping": guild.get_role(GIVEAWAY_ROLE_ID)
+        "giveaway_ping": guild.get_role(GIVEAWAY_ROLE_ID),
+        "ssu_ping": guild.get_role(SSU_ROLE_ID),
     }
     role = roles.get(interaction.data["custom_id"])
-    if role is None:
-        await interaction.response.send_message("Role not found.", ephemeral=True)
-        return
-    if role in member.roles:
-        await member.remove_roles(role)
-        await interaction.response.send_message(f"Removed {role.name}", ephemeral=True)
-    else:
-        await member.add_roles(role)
-        await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
+    if role:
+        if role in member.roles:
+            await member.remove_roles(role)
+            await interaction.response.send_message(f"Removed {role.name}", ephemeral=True)
+        else:
+            await member.add_roles(role)
+            await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
 
 
 # === ERROR HANDLER ===
@@ -243,21 +179,13 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
     for guild in bot.guilds:
         if guild.id != MAIN_GUILD_ID:
-            print(f"Leaving unauthorized guild: {guild.name}")
             await guild.leave()
-
-
-    # Add cogs before syncing commands
-    await bot.add_cog(StaffCommands(bot))
-    await bot.add_cog(ServerSession(bot))
-    await bot.add_cog(PingCommands(bot))
-    await bot.add_cog(ReactionRole(bot))
-
-
-    # Sync slash commands to main guild only
     guild = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
+    await bot.add_cog(StaffCommands(bot))
+    await bot.add_cog(ServerSession(bot))
+    await bot.add_cog(ReactionRole(bot))
 
 
 bot.run(TOKEN)
