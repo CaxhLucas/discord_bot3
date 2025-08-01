@@ -197,4 +197,14 @@ async def on_ready():
     await bot.add_cog(ReactionRole(bot))
 
 
+    # Register persistent view so buttons keep working after restart
+    view = ui.View(timeout=None)
+    view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
+    view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
+    view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
+    view.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
+    bot.add_view(view)
+
+
+
 bot.run(TOKEN)
