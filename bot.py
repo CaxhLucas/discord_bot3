@@ -30,15 +30,11 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-
-
 # === BOD CHECK ===
 def is_bod():
     async def predicate(interaction: discord.Interaction):
         return any(role.id == BOD_ROLE_ID for role in interaction.user.roles)
     return app_commands.check(predicate)
-
-
 
 
 # === STAFF COMMANDS COG ===
@@ -74,8 +70,6 @@ class StaffCommands(commands.Cog):
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Infraction logged.", ephemeral=True)
-
-
 
 
 # === SESSION COMMANDS COG ===
@@ -121,9 +115,16 @@ class ServerSession(commands.Cog):
         await interaction.response.send_message("Shutdown announced.", ephemeral=True)
 
 
-
-
 # === REACTION ROLE COG ===
+class ReactionButtons(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
+        self.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
+        self.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
+        self.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
+
+
 class ReactionRole(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -132,41 +133,37 @@ class ReactionRole(commands.Cog):
     @app_commands.command(name="sendreactionroles", description="Send reaction roles panel")
     @is_bod()
     async def sendreactionroles(self, interaction: discord.Interaction):
-        view = ui.View(timeout=None)
-        view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
-        view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
-        view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
-        view.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
-
-
         embed = discord.Embed(
             title="🎌 Reaction Roles",
             description="Click the buttons below to toggle your ping roles!",
             color=discord.Color.blurple()
         )
-
-
         channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
-        await channel.send(embed=embed, view=view)
+        await channel.send(embed=embed, view=ReactionButtons())
         await interaction.response.send_message("Reaction role panel sent!", ephemeral=True)
 
 
-
-
-# === INTERACTION HANDLER ===
+# === BUTTON HANDLING ===
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
         return
+
+
     member = interaction.user
     guild = interaction.guild
+    custom_id = interaction.data["custom_id"]
+
+
     roles = {
         "event_ping": guild.get_role(EVENT_ROLE_ID),
         "announce_ping": guild.get_role(ANNOUNCE_ROLE_ID),
         "giveaway_ping": guild.get_role(GIVEAWAY_ROLE_ID),
         "ssu_ping": guild.get_role(SSU_ROLE_ID),
     }
-    role = roles.get(interaction.data["custom_id"])
+
+
+    role = roles.get(custom_id)
     if role:
         if role in member.roles:
             await member.remove_roles(role)
@@ -176,8 +173,6 @@ async def on_interaction(interaction: discord.Interaction):
             await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
 
 
-
-
 # === ERROR HANDLER ===
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
@@ -185,8 +180,6 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
     else:
         await interaction.response.send_message(f"Error: {error}", ephemeral=True)
-
-
 
 
 # === ON READY ===
@@ -202,8 +195,6 @@ async def on_ready():
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(ServerSession(bot))
     await bot.add_cog(ReactionRole(bot))
-
-
 
 
 bot.run(TOKEN)
