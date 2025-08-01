@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands, ui
 import os
-import datetime
 
 
 # === CONFIGURATION ===
@@ -19,7 +18,7 @@ SSU_ROLE_ID = 1371272556820041854
 EVENT_ROLE_ID = 1371272556820041853
 ANNOUNCE_ROLE_ID = 1371272556820041852
 GIVEAWAY_ROLE_ID = 1400878647753048164
-REACTION_ROLE_CHANNEL_ID = 1371272557969281159
+REACTION_ROLE_CHANNEL_ID = 1371272557969281159  # (unused now, but kept)
 
 
 # === INTENTS AND BOT SETUP ===
@@ -31,11 +30,15 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+
+
 # === BOD CHECK ===
 def is_bod():
     async def predicate(interaction: discord.Interaction):
         return any(role.id == BOD_ROLE_ID for role in interaction.user.roles)
     return app_commands.check(predicate)
+
+
 
 
 # === STAFF COMMANDS COG ===
@@ -71,6 +74,8 @@ class StaffCommands(commands.Cog):
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Infraction logged.", ephemeral=True)
+
+
 
 
 # === SESSION COMMANDS COG ===
@@ -116,6 +121,8 @@ class ServerSession(commands.Cog):
         await interaction.response.send_message("Shutdown announced.", ephemeral=True)
 
 
+
+
 # === REACTION ROLE COG ===
 class ReactionRole(commands.Cog):
     def __init__(self, bot):
@@ -137,14 +144,16 @@ class ReactionRole(commands.Cog):
             description="Click the buttons below to toggle your ping roles!",
             color=discord.Color.blurple()
         )
-        await interaction.response.send_message("Reaction roles panel sent!", ephemeral=True)
-        channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
-        await channel.send(embed=embed, view=view)
+        # Send buttons and embed directly to command user so they can see it immediately
+        await interaction.response.send_message(embed=embed, view=view)
 
 
+
+
+# Button click event handler
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    if not interaction.type == discord.InteractionType.component:
+    if interaction.type != discord.InteractionType.component:
         return
     member = interaction.user
     guild = interaction.guild
@@ -164,6 +173,8 @@ async def on_interaction(interaction: discord.Interaction):
             await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
 
 
+
+
 # === ERROR HANDLER ===
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
@@ -171,6 +182,8 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
     else:
         await interaction.response.send_message(f"Error: {error}", ephemeral=True)
+
+
 
 
 # === ON READY ===
@@ -186,6 +199,8 @@ async def on_ready():
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(ServerSession(bot))
     await bot.add_cog(ReactionRole(bot))
+
+
 
 
 bot.run(TOKEN)
