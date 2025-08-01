@@ -6,7 +6,7 @@ import os
 
 # === CONFIGURATION ===
 TOKEN = os.environ["DISCORD_TOKEN"]
-MAIN_GUILD_ID = 1371272556820041849  # Your server ID here
+MAIN_GUILD_ID = 1371272556820041849
 
 
 # Role & Channel IDs
@@ -48,10 +48,10 @@ class StaffCommands(commands.Cog):
     @app_commands.describe(user="User to promote", new_rank="New rank", reason="Promotion reason")
     async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
         embed = discord.Embed(title="📈 Staff Promotion", color=discord.Color.green())
-        embed.add_field(name="User", value=user.mention)
-        embed.add_field(name="New Rank", value=new_rank)
-        embed.add_field(name="Reason", value=reason)
-        embed.add_field(name="Promoted By", value=interaction.user.mention)
+        embed.add_field(name="User", value=user.mention, inline=False)
+        embed.add_field(name="New Rank", value=new_rank, inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Promoted By", value=interaction.user.mention, inline=False)
         channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Promotion logged.", ephemeral=True)
@@ -62,11 +62,11 @@ class StaffCommands(commands.Cog):
     @app_commands.describe(user="User to infract", reason="Infraction reason", punishment="Warning/Strike/etc", expires="Optional expiry")
     async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
         embed = discord.Embed(title="⚠️ Staff Infraction", color=discord.Color.red())
-        embed.add_field(name="User", value=user.mention)
-        embed.add_field(name="Punishment", value=punishment)
-        embed.add_field(name="Reason", value=reason)
-        embed.add_field(name="Issued By", value=interaction.user.mention)
-        embed.add_field(name="Expires", value=expires)
+        embed.add_field(name="User", value=user.mention, inline=False)
+        embed.add_field(name="Punishment", value=punishment, inline=False)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Issued By", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Expires", value=expires, inline=False)
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Infraction logged.", ephemeral=True)
@@ -136,12 +136,14 @@ class ReactionRole(commands.Cog):
             description="Click the buttons below to toggle your ping roles!",
             color=discord.Color.blurple()
         )
+
+
         channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
         await channel.send(embed=embed, view=view)
         await interaction.response.send_message("Reaction role panel sent!", ephemeral=True)
 
 
-# === INTERACTION HANDLER ===
+# === BUTTON INTERACTIONS ===
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
@@ -180,13 +182,6 @@ async def on_ready():
     for guild in bot.guilds:
         if guild.id != MAIN_GUILD_ID:
             await guild.leave()
-    guild_obj = discord.Object(id=MAIN_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild_obj)
-    try:
-        synced = await bot.tree.sync(guild=guild_obj)
-        print(f"Synced {len(synced)} commands to guild {MAIN_GUILD_ID}")
-    except Exception as e:
-        print(f"Error syncing commands: {e}")
 
 
     await bot.add_cog(StaffCommands(bot))
@@ -194,6 +189,8 @@ async def on_ready():
     await bot.add_cog(ReactionRole(bot))
 
 
+    synced = await bot.tree.sync(guild=discord.Object(id=MAIN_GUILD_ID))
+    print(f"Synced {len(synced)} commands to the main guild.")
 
 
 bot.run(TOKEN)
