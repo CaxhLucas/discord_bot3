@@ -47,6 +47,7 @@ class StaffCommands(commands.Cog):
     @is_bod()
     @app_commands.describe(user="User to promote", new_rank="New rank", reason="Promotion reason")
     async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
+        print(f"[PROMOTE] {interaction.user} promoting {user} to {new_rank}")
         embed = discord.Embed(title="📈 Staff Promotion", color=discord.Color.green())
         embed.add_field(name="User", value=user.mention)
         embed.add_field(name="New Rank", value=new_rank)
@@ -61,6 +62,7 @@ class StaffCommands(commands.Cog):
     @is_bod()
     @app_commands.describe(user="User to infract", reason="Infraction reason", punishment="Warning/Strike/etc", expires="Optional expiry")
     async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
+        print(f"[INFRACT] {interaction.user} infracting {user} with {punishment}")
         embed = discord.Embed(title="⚠️ Staff Infraction", color=discord.Color.red())
         embed.add_field(name="User", value=user.mention)
         embed.add_field(name="Punishment", value=punishment)
@@ -81,6 +83,7 @@ class ServerSession(commands.Cog):
     @app_commands.command(name="serverstart", description="Announce server start")
     @is_bod()
     async def serverstart(self, interaction: discord.Interaction):
+        print(f"[SERVERSTART] by {interaction.user}")
         embed = discord.Embed(
             title="Session Started",
             description=(
@@ -101,6 +104,7 @@ class ServerSession(commands.Cog):
     @app_commands.command(name="serverstop", description="Announce server stop")
     @is_bod()
     async def serverstop(self, interaction: discord.Interaction):
+        print(f"[SERVERSTOP] by {interaction.user}")
         embed = discord.Embed(
             title="Server Shutdown",
             description=(
@@ -116,15 +120,6 @@ class ServerSession(commands.Cog):
 
 
 # === REACTION ROLE COG ===
-class ReactionButtons(ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
-        self.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
-        self.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
-        self.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
-
-
 class ReactionRole(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -133,37 +128,41 @@ class ReactionRole(commands.Cog):
     @app_commands.command(name="sendreactionroles", description="Send reaction roles panel")
     @is_bod()
     async def sendreactionroles(self, interaction: discord.Interaction):
+        print(f"[REACTIONROLES] command by {interaction.user}")
+        view = ui.View(timeout=None)
+        view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
+        view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
+        view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
+        view.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
+
+
         embed = discord.Embed(
             title="🎌 Reaction Roles",
             description="Click the buttons below to toggle your ping roles!",
             color=discord.Color.blurple()
         )
+
+
         channel = interaction.guild.get_channel(REACTION_ROLE_CHANNEL_ID)
-        await channel.send(embed=embed, view=ReactionButtons())
+        await channel.send(embed=embed, view=view)
         await interaction.response.send_message("Reaction role panel sent!", ephemeral=True)
 
 
-# === BUTTON HANDLING ===
+# === INTERACTION HANDLER ===
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     if interaction.type != discord.InteractionType.component:
         return
-
-
+    print(f"[INTERACTION] Component clicked: {interaction.data['custom_id']} by {interaction.user}")
     member = interaction.user
     guild = interaction.guild
-    custom_id = interaction.data["custom_id"]
-
-
     roles = {
         "event_ping": guild.get_role(EVENT_ROLE_ID),
         "announce_ping": guild.get_role(ANNOUNCE_ROLE_ID),
         "giveaway_ping": guild.get_role(GIVEAWAY_ROLE_ID),
         "ssu_ping": guild.get_role(SSU_ROLE_ID),
     }
-
-
-    role = roles.get(custom_id)
+    role = roles.get(interaction.data["custom_id"])
     if role:
         if role in member.roles:
             await member.remove_roles(role)
@@ -189,22 +188,16 @@ async def on_ready():
     for guild in bot.guilds:
         if guild.id != MAIN_GUILD_ID:
             await guild.leave()
-    guild = discord.Object(id=MAIN_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
+    guild = bot.get_guild(MAIN_GUILD_ID)
+    if guild:
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        print(f"Synced commands to guild: {guild.name}")
+    else:
+        print("Main guild not found!")
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(ServerSession(bot))
     await bot.add_cog(ReactionRole(bot))
-
-
-    # Register persistent view so buttons keep working after restart
-    view = ui.View(timeout=None)
-    view.add_item(ui.Button(label="Get Event Ping", custom_id="event_ping", style=discord.ButtonStyle.primary))
-    view.add_item(ui.Button(label="Get Announcement Ping", custom_id="announce_ping", style=discord.ButtonStyle.success))
-    view.add_item(ui.Button(label="Get Giveaway Ping", custom_id="giveaway_ping", style=discord.ButtonStyle.danger))
-    view.add_item(ui.Button(label="Get SSU Ping", custom_id="ssu_ping", style=discord.ButtonStyle.secondary))
-    bot.add_view(view)
-
 
 
 bot.run(TOKEN)
