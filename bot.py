@@ -29,32 +29,28 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-GUILD_ID = 1371272556820041849  # Your server ID here
+AUTHORIZED_GUILD_IDS = [1371272556820041849]  # Put your allowed server IDs here
 
 
-# --- Events ---
+# --- Event to auto-leave unauthorized guilds ---
+@bot.event
+async def on_guild_join(guild):
+    if guild.id not in AUTHORIZED_GUILD_IDS:
+        try:
+            await guild.leave()
+            print(f"Left unauthorized guild: {guild.name} ({guild.id})")
+        except Exception as e:
+            print(f"Failed to leave guild {guild.name}: {e}")
+
+
+# --- Ready Event ---
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    guild = discord.Object(id=GUILD_ID)
-    try:
-        synced = await bot.tree.sync(guild=guild)
-        print(f"🔁 Synced {len(synced)} command(s) to dev server")
-    except Exception as e:
-        print(f"❌ Sync error: {e}")
 
 
-@bot.event
-async def on_guild_join(guild):
-    owner = (await bot.application_info()).owner
-    try:
-        await owner.send(f"⚠️ I was added to a new server: **{guild.name}** (ID: {guild.id}) with {guild.member_count} members.")
-    except Exception as e:
-        print(f"Couldn't notify owner: {e}")
-
-
-# --- Slash Commands ---
-@bot.tree.command(name="embed", description="Send a custom embed to a channel", guild=discord.Object(id=GUILD_ID))
+# --- Slash command for embed ---
+@bot.tree.command(name="embed", description="Send a custom embed to a channel", guild=discord.Object(id=AUTHORIZED_GUILD_IDS[0]))
 @app_commands.describe(
     channel="Channel to send the embed",
     title="Embed title",
