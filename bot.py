@@ -48,7 +48,7 @@ class EmbedSender(commands.Cog):
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    # Leave any server that isn’t your main one
+    # leave any server that isn't the main one
     for guild in bot.guilds:
         if guild.id != MAIN_GUILD_ID:
             print(f"Leaving unauthorized guild: {guild.name} ({guild.id})")
@@ -56,7 +56,7 @@ async def on_ready():
 
     await bot.add_cog(EmbedSender(bot))
 
-    # Sync slash commands to your server only
+    # sync commands to main server only
     guild = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
