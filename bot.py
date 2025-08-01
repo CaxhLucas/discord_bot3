@@ -100,5 +100,82 @@ async def on_ready():
     guild = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
+import discord
+from discord.ext import commands
+from discord import app_commands
+import os
+
+intents = discord.Intents.default()
+intents.guilds = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+TOKEN = os.environ["DISCORD_TOKEN"]
+
+MAIN_GUILD_ID = 1371272556820041849
+SESSION_CHANNEL_ID = 1396277983211163668
+SSU_ROLE_ID = 1371272556820041854
+BOD_ROLE_ID = 1371272557034209493
+
+class ServerSession(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    def is_bod():
+        async def predicate(interaction: discord.Interaction):
+            roles = [role.id for role in interaction.user.roles]
+            return BOD_ROLE_ID in roles
+        return app_commands.check(predicate)
+
+    @app_commands.command(name="serverstart", description="Announce server session start")
+    @is_bod()
+    async def serverstart(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Session Started",
+            description=(
+                "The Staff Team has started a session!\n"
+                "Please remember to read all of our in-game rules before joining to prevent moderation.\n\n"
+                "Server Name: Iowa State Roleplay\n"
+                "In-game Code: vcJJf\n\n"
+                "And have a great roleplay experience!"
+            ),
+            color=discord.Color.green()
+        )
+        channel = self.bot.get_channel(SESSION_CHANNEL_ID)
+        ssu_role = interaction.guild.get_role(SSU_ROLE_ID)
+        if channel and ssu_role:
+            await channel.send(content=ssu_role.mention, embed=embed)
+            await interaction.response.send_message("Server start announced!", ephemeral=True)
+        else:
+            await interaction.response.send_message("Failed to find channel or role.", ephemeral=True)
+
+    @app_commands.command(name="serverstop", description="Announce server session stop")
+    @is_bod()
+    async def serverstop(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Server Shutdown",
+            description=(
+                "The server is currently shut down.\n"
+                "Please do not join in-game under any circumstances unless told by SHR+\n\n"
+                "Please be patient and keep an eye out for our next session here!"
+            ),
+            color=discord.Color.red()
+        )
+        channel = self.bot.get_channel(SESSION_CHANNEL_ID)
+        if channel:
+            await channel.send(embed=embed)
+            await interaction.response.send_message("Server shutdown announced!", ephemeral=True)
+        else:
+            await interaction.response.send_message("Failed to find the session channel.", ephemeral=True)
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    guild = discord.Object(id=MAIN_GUILD_ID)
+    bot.tree.copy_global_to(guild=guild)
+    await bot.tree.sync(guild=guild)
+
+bot.add_cog(ServerSession(bot))
+bot.run(TOKEN)
 
 bot.run(TOKEN)
