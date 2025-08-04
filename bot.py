@@ -197,7 +197,7 @@ class SuggestionCog(commands.Cog):
         if image_url:
             embed.set_image(url=image_url)
         # Post suggestion in a channel (use PROMOTION_CHANNEL_ID for example, or set a SUGGESTION_CHANNEL_ID)
-        suggestion_channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
+        suggestion_channel = interaction.guild.get_channel(1401761820431355986)
         message = await suggestion_channel.send(embed=embed)
         # Create thread for discussion
         await message.create_thread(name=f"Suggestion: {title or 'No Title'}", auto_archive_duration=60)
@@ -385,5 +385,6 @@ async def on_ready():
         await channel.purge(limit=5)
         await channel.send("Click the buttons below to get or remove a ping role:", view=view)
 bot.run(TOKEN)
+
 
 
