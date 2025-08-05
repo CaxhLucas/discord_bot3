@@ -9,16 +9,12 @@ import re
 import random
 import traceback
 
-
 # ---- CONFIG ----
 TOKEN = os.environ["DISCORD_TOKEN"]
-
-
 MAIN_GUILD_ID = 1371272556820041849
 BOD_ROLE_ID = 1371272557034209493
 SUPERVISOR_ROLE_IDS = [1371272557034209491, 1371272557034209496]
 OWNER_IDS = [902727710990811186, 1341152829967958114]
-
 
 PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
@@ -31,7 +27,6 @@ REACTION_CHANNEL_ID = 1371272557969281159
 LOGGING_CHANNEL_ID = 1371272557692452884
 SUGGESTION_CHANNEL_ID = 1401761820431355986
 
-
 LEVEL_ROLES = {
     1: 1401750387542855710,
     5: 1401750539229728919,
@@ -39,10 +34,8 @@ LEVEL_ROLES = {
     20: 1401750676911947837,
 }
 
-
 XP_DATA_FILE = "xp_data.json"
 GIVEAWAYS_DATA_FILE = "giveaways.json"
-
 
 # ---- INTENTS ----
 intents = discord.Intents.default()
@@ -52,27 +45,24 @@ intents.messages = True
 intents.message_content = True
 intents.reactions = True
 
-
 bot = commands.Bot(command_prefix="!", intents=intents)
-
 
 # ---- HELPERS ----
 def is_staff(interaction: discord.Interaction) -> bool:
     roles = getattr(interaction.user, 'roles', [])
     return any(r.id == BOD_ROLE_ID or r.id in SUPERVISOR_ROLE_IDS for r in roles)
 
-
 def save_json(filename: str, data: dict):
     with open(filename, "w") as f:
         json.dump(data, f, indent=2)
 
-
 def load_json(filename: str) -> dict:
     if not os.path.exists(filename):
+        with open(filename, "w") as f:
+            json.dump({}, f)
         return {}
     with open(filename, "r") as f:
         return json.load(f)
-
 
 def parse_duration(duration_str: str) -> int | None:
     duration_str = duration_str.lower().replace(" ", "")
@@ -82,25 +72,20 @@ def parse_duration(duration_str: str) -> int | None:
     amount, unit = int(match.group(1)), match.group(2)
     return {"s": amount, "m": amount*60, "h": amount*3600, "d": amount*86400}.get(unit)
 
-
 xp_data = load_json(XP_DATA_FILE)
 giveaways = load_json(GIVEAWAYS_DATA_FILE)
-
 
 # ---- LEVELING ----
 async def save_xp():
     save_json(XP_DATA_FILE, xp_data)
-
 
 async def update_level(member: discord.Member, channel: discord.TextChannel):
     user_id = str(member.id)
     xp_data.setdefault(user_id, {"messages": 0, "level": 0})
     xp_data[user_id]["messages"] += 1
 
-
     msg_count = xp_data[user_id]["messages"]
     prev_level = xp_data[user_id]["level"]
-
 
     if msg_count >= 250:
         new_level = 20
@@ -113,7 +98,6 @@ async def update_level(member: discord.Member, channel: discord.TextChannel):
     else:
         new_level = prev_level
 
-
     if new_level > prev_level:
         xp_data[user_id]["level"] = new_level
         # Remove old level roles except new_level
@@ -122,9 +106,8 @@ async def update_level(member: discord.Member, channel: discord.TextChannel):
             if role in member.roles and lvl != new_level:
                 try:
                     await member.remove_roles(role)
-                except:
+                except Exception:
                     pass
-
 
         # Add new role
         new_role_id = LEVEL_ROLES.get(new_level)
@@ -133,26 +116,22 @@ async def update_level(member: discord.Member, channel: discord.TextChannel):
             if role and role not in member.roles:
                 try:
                     await member.add_roles(role)
-                except:
+                except Exception:
                     pass
-
 
         # Send level-up message and auto delete after 10 seconds
         try:
             msg = await channel.send(f"🎉 **{member.display_name}** reached **Level {new_level}**!")
             await asyncio.sleep(10)
             await msg.delete()
-        except:
+        except Exception:
             pass
 
-
         await save_xp()
-
 
 # ---- GIVEAWAYS ----
 async def save_giveaways():
     save_json(GIVEAWAYS_DATA_FILE, giveaways)
-
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -167,7 +146,6 @@ async def on_raw_reaction_add(payload):
         g["participants"].append(payload.user_id)
         await save_giveaways()
 
-
 @tasks.loop(seconds=60)
 async def giveaway_check():
     now = int(datetime.datetime.utcnow().timestamp())
@@ -180,7 +158,7 @@ async def giveaway_check():
                 continue
             try:
                 message = await channel.fetch_message(int(gid))
-            except:
+            except Exception:
                 to_remove.append(gid)
                 continue
             participants = g.get("participants", [])
@@ -195,16 +173,14 @@ async def giveaway_check():
     if to_remove:
         await save_giveaways()
 
-
 # ---- COGS ----
 class StaffCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="promote")
+    @app_commands.command(name="promote", description="Promote a staff member")
     @app_commands.check(is_staff)
-    async def promote(self, interaction, user: discord.Member, new_rank: str, reason: str):
+    async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
         e = discord.Embed(title="📈 Staff Promotion", color=discord.Color.green(), timestamp=datetime.datetime.utcnow())
         e.add_field(name="User", value=user.mention)
         e.add_field(name="New Rank", value=new_rank)
@@ -213,10 +189,9 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(PROMOTION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message(f"{user.mention} promoted.", ephemeral=True)
 
-
-    @app_commands.command(name="infract")
+    @app_commands.command(name="infract", description="Issue an infraction")
     @app_commands.check(is_staff)
-    async def infract(self, interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
+    async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
         e = discord.Embed(title="⚠️ Staff Infraction", color=discord.Color.red(), timestamp=datetime.datetime.utcnow())
         e.add_field(name="User", value=user.mention)
         e.add_field(name="Punishment", value=punishment)
@@ -226,10 +201,9 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(INFRACTION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message(f"{user.mention} infracted.", ephemeral=True)
 
-
-    @app_commands.command(name="serverstart")
+    @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_staff)
-    async def serverstart(self, interaction):
+    async def serverstart(self, interaction: discord.Interaction):
         e = discord.Embed(
             title="✅ Session Started",
             description=(
@@ -243,10 +217,9 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(content=f"<@&{SSU_ROLE_ID}>", embed=e)
         await interaction.response.send_message("Session started.", ephemeral=True)
 
-
-    @app_commands.command(name="serverstop")
+    @app_commands.command(name="serverstop", description="Stop the session")
     @app_commands.check(is_staff)
-    async def serverstop(self, interaction):
+    async def serverstop(self, interaction: discord.Interaction):
         e = discord.Embed(
             title="⛔ Server Shut Down",
             description=(
@@ -259,19 +232,16 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message("Session stopped.", ephemeral=True)
 
-
 class ReactionRolesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
 
     class RoleButton(discord.ui.Button):
         def __init__(self, role_id, label):
             super().__init__(label=label, style=discord.ButtonStyle.primary)
             self.role_id = role_id
 
-
-        async def callback(self, interaction):
+        async def callback(self, interaction: discord.Interaction):
             role = interaction.guild.get_role(self.role_id)
             if role in interaction.user.roles:
                 await interaction.user.remove_roles(role)
@@ -279,7 +249,6 @@ class ReactionRolesCog(commands.Cog):
             else:
                 await interaction.user.add_roles(role)
                 await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
-
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -292,22 +261,22 @@ class ReactionRolesCog(commands.Cog):
                 ANNOUNCEMENT_ROLE_ID: "Announcement Ping",
                 GIVEAWAY_ROLE_ID: "Giveaway Ping",
             }
+            # Purge previous bot messages (optional, uncomment if desired)
+            # await channel.purge(limit=5)
             for role_id, label in roles.items():
                 view.add_item(self.RoleButton(role_id, label))
             try:
                 await channel.send("Click to toggle pings:", view=view)
-            except:
+            except Exception:
                 pass
-
 
 class EmbedCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="embed")
+    @app_commands.command(name="embed", description="Send a custom embed")
     @app_commands.check(is_staff)
-    async def embed(self, interaction, channel: discord.TextChannel, title: str = None, description: str = None, image_url: str = None):
+    async def embed(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str = None, description: str = None, image_url: str = None):
         e = discord.Embed(
             title=title or discord.Embed.Empty,
             description=description or discord.Embed.Empty,
@@ -318,14 +287,12 @@ class EmbedCog(commands.Cog):
         await channel.send(embed=e)
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
-
 class ReportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="report")
-    async def report(self, interaction, staff_member: discord.Member, reason: str, anonymous: bool = True):
+    @app_commands.command(name="report", description="Report a staff member anonymously")
+    async def report(self, interaction: discord.Interaction, staff_member: discord.Member, reason: str, anonymous: bool = True):
         msg = (
             f"Anonymous report:\nStaff: {staff_member}\nReason: {reason}"
             if anonymous
@@ -336,18 +303,16 @@ class ReportCog(commands.Cog):
             if u:
                 try:
                     await u.send(msg)
-                except:
+                except Exception:
                     pass
         await interaction.response.send_message("Report sent.", ephemeral=True)
-
 
 class SuggestCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="suggest")
-    async def suggest(self, interaction, title: str, description: str, anonymous: bool = False):
+    @app_commands.command(name="suggest", description="Make a suggestion")
+    async def suggest(self, interaction: discord.Interaction, title: str, description: str, anonymous: bool = False):
         e = discord.Embed(
             title=title,
             description=description,
@@ -363,15 +328,13 @@ class SuggestCog(commands.Cog):
         await msg.create_thread(name=f"Suggestion: {title or 'Untitled'}", auto_archive_duration=1440)
         await interaction.response.send_message("Suggestion posted!", ephemeral=True)
 
-
 class GiveawayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="giveaway")
+    @app_commands.command(name="giveaway", description="Start a giveaway")
     @app_commands.check(is_staff)
-    async def giveaway(self, interaction, duration: str, winners: int, prize: str):
+    async def giveaway(self, interaction: discord.Interaction, duration: str, winners: int, prize: str):
         sec = parse_duration(duration)
         if not sec or sec < 10:
             return await interaction.response.send_message("Invalid duration.", ephemeral=True)
@@ -395,14 +358,12 @@ class GiveawayCog(commands.Cog):
         await save_giveaways()
         await interaction.response.send_message("Giveaway started!", ephemeral=True)
 
-
 class RankCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-
-    @app_commands.command(name="rank")
-    async def rank(self, interaction):
+    @app_commands.command(name="rank", description="Show your current level and XP")
+    async def rank(self, interaction: discord.Interaction):
         d = xp_data.get(str(interaction.user.id), {"messages": 0, "level": 0})
         lvl = d["level"]
         msgs = d["messages"]
@@ -410,19 +371,16 @@ class RankCog(commands.Cog):
         desc = f"Messages: {msgs}\nLevel: {lvl}\n" + (f"Next: {next_lvl}" if next_lvl else "Max level!")
         await interaction.response.send_message(embed=discord.Embed(title=f"{interaction.user.display_name}'s Rank", description=desc, color=discord.Color.gold()), ephemeral=True)
 
-
-# ---- EVENTS ----
+# ---- EVENTS & ERROR HANDLING ----
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     for g in bot.guilds:
         if g.id != MAIN_GUILD_ID:
             await g.leave()
-    g = bot.get_guild(MAIN_GUILD_ID)
-    if g:
-        await bot.tree.sync(guild=g)
+    guild_obj = discord.Object(id=MAIN_GUILD_ID)
+    await bot.tree.sync(guild=guild_obj)
     giveaway_check.start()
-
 
 @bot.event
 async def on_message(msg):
@@ -432,6 +390,18 @@ async def on_message(msg):
         await update_level(msg.author, msg.channel)
     await bot.process_commands(msg)
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    log_channel = bot.get_channel(LOGGING_CHANNEL_ID)
+    if isinstance(error, app_commands.MissingRole):
+        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        if log_channel:
+            await log_channel.send(f"{interaction.user} tried to use {interaction.command} without permission.")
+    else:
+        await interaction.response.send_message("An error occurred. Please contact staff.", ephemeral=True)
+        if log_channel:
+            tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            await log_channel.send(f"Error in command {interaction.command} by {interaction.user}: {error}\n```py\n{tb}\n```")
 
 # ---- START ----
 async def setup_cogs():
@@ -443,11 +413,10 @@ async def setup_cogs():
     await bot.add_cog(GiveawayCog(bot))
     await bot.add_cog(RankCog(bot))
 
-
 async def main():
     async with bot:
         await setup_cogs()
         await bot.start(TOKEN)
 
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
