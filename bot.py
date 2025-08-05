@@ -353,11 +353,19 @@ class LevelingCog(commands.Cog):
             if count >= lvl and LEVEL_ROLES[lvl] not in user_roles_ids:
                 role = message.guild.get_role(LEVEL_ROLES[lvl])
                 if role:
-                    try:
-                        await message.author.add_roles(role, reason="Level up reward")
-                        await message.channel.send(f"🎉 Congrats {message.author.mention}, you've leveled up to **Level {lvl}**!")
-                    except:
-                        pass
+                    await message.author.add_roles(role, reason="Level up reward")
+                    msg = await message.channel.send(
+                        f"🎉 Congrats {message.author.mention}, you've leveled up to **Level {lvl}**!",
+                        delete_after=10
+                    )
+                    # Remove old level roles after 10 seconds
+                    await asyncio.sleep(10)
+                    # Only remove other level roles, not all roles
+                    for level_value, role_id in LEVEL_ROLES.items():
+                        if role_id in [r.id for r in message.author.roles] and role_id != LEVEL_ROLES[lvl]:
+                            old_role = message.guild.get_role(role_id)
+                            if old_role:
+                                await message.author.remove_roles(old_role, reason="Level up: remove old level role")
                 break
 
 class ReactionRoleButtons(discord.ui.View):
