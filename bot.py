@@ -10,27 +10,23 @@ import asyncio
 TOKEN = os.environ["DISCORD_TOKEN"]
 MAIN_GUILD_ID = 1371272556820041849
 
-# Roles
 BOD_ROLE_ID = 1371272557034209493
 SUPERVISOR_ROLE_IDS = [1371272557034209491, 1371272557034209496]
 STAFF_ROLE_IDS = [BOD_ROLE_ID] + SUPERVISOR_ROLE_IDS
 OWNER_IDS = [902727710990811186, 1341152829967958114]
 
-# Channels
 PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
 SESSION_CHANNEL_ID = 1396277983211163668
 REACTION_CHANNEL_ID = 1371272557969281159
 LOGGING_CHANNEL_ID = 1371272557692452884
-SUGGESTION_CHANNEL_ID = 1400683757786365972  # Set to PROMOTION_CHANNEL_ID for now (change if you want)
+SUGGESTION_CHANNEL_ID = 1401761820431355986
 
-# Ping Roles for reaction roles
 SSU_ROLE_ID = 1371272556820041854
 EVENT_ROLE_ID = 1371272556820041853
 ANNOUNCEMENT_ROLE_ID = 1371272556820041852
 GIVEAWAY_ROLE_ID = 1400878647753048164
 
-# Leveling Roles & thresholds
 LEVEL_ROLES = {
     1: 1401750387542855710,
     5: 1401750539229728919,
@@ -38,7 +34,6 @@ LEVEL_ROLES = {
     20: 1401750676911947837,
 }
 
-# ====== INTENTS =======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -56,7 +51,19 @@ def is_bod(interaction: discord.Interaction) -> bool:
 def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
-# --- STAFF COMMANDS COG ---
+def parse_duration(duration_str: str):
+    unit = duration_str[-1]
+    if not duration_str[:-1].isdigit():
+        return None
+    amount = int(duration_str[:-1])
+    if unit == "m":
+        return amount * 60
+    elif unit == "h":
+        return amount * 3600
+    elif unit == "d":
+        return amount * 86400
+    return None
+
 class StaffCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -159,7 +166,6 @@ class StaffCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
-# --- REPORT COG ---
 class ReportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -190,13 +196,11 @@ class ReportCog(commands.Cog):
         else:
             await interaction.response.send_message("Failed to send report. Owners might have DMs closed.", ephemeral=True)
 
-# --- SUGGESTION COG ---
 class SuggestionCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name="suggest", description="Submit a suggestion")
-    @app_commands.check(is_staff)
     @app_commands.describe(
         name="Your name (optional for anonymous)",
         anonymous="Send anonymously?",
@@ -220,19 +224,38 @@ class SuggestionCog(commands.Cog):
         await message.create_thread(name=f"Suggestion: {title or 'No Title'}", auto_archive_duration=60)
         await interaction.response.send_message("Suggestion submitted.", ephemeral=True)
 
-# --- GIVEAWAY COG ---
-def parse_duration(duration_str: str):
-    unit = duration_str[-1]
-    if not duration_str[:-1].isdigit():
-        return None
-    amount = int(duration_str[:-1])
-    if unit == "m":
-        return amount * 60
-    elif unit == "h":
-        return amount * 3600
-    elif unit == "d":
-        return amount * 86400
-    return None
+class GiveawayView(discord.ui.View):
+    def __init__(self, cog, winners):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.winners = winners
+
+    @discord.ui.button(label="Enter Giveaway", style=discord.ButtonStyle.success, custom_id="giveaway_enter")
+    async def enter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        giveaway = self.cog.active_giveaways.get(interaction.message.id)
+        if giveaway is None or giveaway.get("ended"):
+            return await interaction.response.send_message("This giveaway has ended.", ephemeral=True)
+        if interaction.user.id in giveaway["participants"]:
+            return await interaction.response.send_message("You already entered!", ephemeral=True)
+        giveaway["participants"].add(interaction.user.id)
+        await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
+
+    @discord.ui.button(label="Show Entrants", style=discord.ButtonStyle.secondary, custom_id="giveaway_show_entrants")
+    async def show_entrants(self, interaction: discord.Interaction, button: discord.ui.Button):
+        giveaway = self.cog.active_giveaways.get(interaction.message.id)
+        if giveaway is None:
+            return await interaction.response.send_message("Giveaway not found.", ephemeral=True)
+        if not giveaway["participants"]:
+            return await interaction.response.send_message("No one has entered yet.", ephemeral=True)
+        mentions = []
+        for uid in giveaway["participants"]:
+            member = interaction.guild.get_member(uid)
+            if member:
+                mentions.append(member.mention)
+            else:
+                mentions.append(f"<@{uid}>")
+        content = "**Entrants:**\n" + "\n".join(mentions)
+        await interaction.response.send_message(content, ephemeral=True)
 
 class GiveawayCog(commands.Cog):
     def __init__(self, bot):
@@ -271,9 +294,18 @@ class GiveawayCog(commands.Cog):
         }
         await interaction.response.send_message(f"Giveaway started in {channel.mention}", ephemeral=True)
 
+    @tasks.loop(seconds=30)
+    async def giveaway_checker(self):
+        now = discord.utils.utcnow().timestamp()
+        for message_id, giveaway in list(self.active_giveaways.items()):
+            if not giveaway["ended"] and giveaway["end_time"] <= now:
+                await self.end_giveaway(message_id)
+                giveaway["ended"] = True
+
     @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload):
-        pass  # You can add reaction-based entries if desired
+    async def on_ready(self):
+        if not self.giveaway_checker.is_running():
+            self.giveaway_checker.start()
 
     async def end_giveaway(self, message_id):
         giveaway = self.active_giveaways.get(message_id)
@@ -303,23 +335,6 @@ class GiveawayCog(commands.Cog):
         await message.edit(embed=embed, view=None)
         self.active_giveaways[message_id]["ended"] = True
 
-class GiveawayView(discord.ui.View):
-    def __init__(self, cog: GiveawayCog, winners: int):
-        super().__init__(timeout=None)
-        self.cog = cog
-        self.winners = winners
-
-    @discord.ui.button(label="Enter Giveaway", style=discord.ButtonStyle.success, custom_id="giveaway_enter")
-    async def enter(self, interaction: discord.Interaction, button: discord.ui.Button):
-        giveaway = self.cog.active_giveaways.get(interaction.message.id)
-        if giveaway is None or giveaway.get("ended"):
-            return await interaction.response.send_message("This giveaway has ended.", ephemeral=True)
-        if interaction.user.id in giveaway["participants"]:
-            return await interaction.response.send_message("You already entered!", ephemeral=True)
-        giveaway["participants"].add(interaction.user.id)
-        await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
-
-# --- LEVELING COG ---
 class LevelingCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -332,7 +347,6 @@ class LevelingCog(commands.Cog):
         user_id = message.author.id
         count = self.user_message_counts.get(user_id, 0) + 1
         self.user_message_counts[user_id] = count
-        # Check level thresholds from highest to lowest
         sorted_levels = sorted(LEVEL_ROLES.keys(), reverse=True)
         user_roles_ids = [role.id for role in message.author.roles]
         for lvl in sorted_levels:
@@ -346,7 +360,6 @@ class LevelingCog(commands.Cog):
                         pass
                 break
 
-# --- REACTION ROLES VIEW ---
 class ReactionRoleButtons(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -376,7 +389,6 @@ async def toggle_role(interaction: discord.Interaction, role_id: int):
         await interaction.user.add_roles(role)
         await interaction.response.send_message(f"Added {role.name} role.", ephemeral=True)
 
-# --- ERROR HANDLING ---
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
     log_channel = bot.get_channel(LOGGING_CHANNEL_ID)
@@ -388,26 +400,21 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         if log_channel:
             await log_channel.send(f"Error in command {interaction.command} by {interaction.user}: {error}")
 
-# --- ON READY EVENT ---
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    # Leave unauthorized guilds
     for guild in bot.guilds:
         if guild.id != MAIN_GUILD_ID:
             print(f"Leaving unauthorized guild: {guild.name}")
             await guild.leave()
-    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(ReportCog(bot))
     await bot.add_cog(GiveawayCog(bot))
     await bot.add_cog(LevelingCog(bot))
     await bot.add_cog(SuggestionCog(bot))
-    # Sync slash commands only to main guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
-    # Reaction roles panel setup
     view = ReactionRoleButtons()
     channel = bot.get_channel(REACTION_CHANNEL_ID)
     if channel:
