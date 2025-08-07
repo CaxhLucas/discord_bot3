@@ -1,17 +1,16 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import asyncio
 import datetime
-import json
 import os
 import random
-import re
+import asyncio
+import json
 
-# ---- CONFIG ----
-TOKEN = os.environ["DISCORD_TOKEN"]
-
+# ====== CONFIG =======
+TOKEN = os.environ.get("DISCORD_TOKEN")
 MAIN_GUILD_ID = 1371272556820041849
+
 BOD_ROLE_ID = 1371272557034209493
 SUPERVISOR_ROLE_IDS = [1371272557034209491, 1371272557034209496]
 STAFF_ROLE_IDS = [BOD_ROLE_ID] + SUPERVISOR_ROLE_IDS
@@ -20,62 +19,70 @@ OWNER_IDS = [902727710990811186, 1341152829967958114]
 PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
 SESSION_CHANNEL_ID = 1396277983211163668
-SSU_ROLE_ID = 1371272556820041854
-EVENT_ROLE_ID = 1371272556820041853
-ANNOUNCEMENT_ROLE_ID = 1371272556820041852
-GIVEAWAY_ROLE_ID = 1400878647753048164
 REACTION_CHANNEL_ID = 1371272557969281159
 LOGGING_CHANNEL_ID = 1371272557692452884
 SUGGESTION_CHANNEL_ID = 1401761820431355986
 
-GIVEAWAYS_DATA_FILE = "giveaways.json"
+SSU_ROLE_ID = 1371272556820041854
+EVENT_ROLE_ID = 1371272556820041853
+ANNOUNCEMENT_ROLE_ID = 1371272556820041852
+GIVEAWAY_ROLE_ID = 1400878647753048164
 
-# ---- INTENTS ----
+GIVEAWAY_FILE = "giveaways.json"
+
 intents = discord.Intents.default()
-intents.guilds = True
-intents.members = True
-intents.messages = True
 intents.message_content = True
+intents.members = True
+intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ---- HELPERS ----
+# ==== HELPERS ====
 def is_staff(interaction: discord.Interaction) -> bool:
-    roles = getattr(interaction.user, 'roles', [])
-    return any(r.id == BOD_ROLE_ID or r.id in SUPERVISOR_ROLE_IDS for r in roles)
+    return any(role.id in STAFF_ROLE_IDS for role in interaction.user.roles)
 
-def save_json(filename: str, data: dict):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=2)
+def is_owner(interaction: discord.Interaction) -> bool:
+    return interaction.user.id in OWNER_IDS
 
-def load_json(filename: str) -> dict:
-    if not os.path.exists(filename):
-        return {}
-    with open(filename, "r") as f:
-        return json.load(f)
-
-def parse_duration(duration_str: str) -> int | None:
-    duration_str = duration_str.lower().replace(" ", "")
-    match = re.match(r"(\d+)([smhd])", duration_str)
-    if not match:
+def parse_duration(duration_str: str):
+    try:
+        unit = duration_str[-1].lower()
+        amount = int(duration_str[:-1])
+        if unit == "s":
+            return amount
+        elif unit == "m":
+            return amount * 60
+        elif unit == "h":
+            return amount * 3600
+        elif unit == "d":
+            return amount * 86400
+    except Exception:
         return None
-    amount, unit = int(match.group(1)), match.group(2)
-    return {"s": amount, "m": amount*60, "h": amount*3600, "d": amount*86400}.get(unit)
+    return None
 
-giveaways = load_json(GIVEAWAYS_DATA_FILE)
+def load_giveaways():
+    try:
+        with open(GIVEAWAY_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-async def save_giveaways():
-    save_json(GIVEAWAYS_DATA_FILE, giveaways)
+def save_giveaways(data):
+    with open(GIVEAWAY_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ---- MESSAGE TRIGGERS ----
+giveaways = load_giveaways()
+
+# ==== MESSAGE TRIGGERS ====
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     content = message.content.lower()
+
     if content.startswith("-inactive"):
         embed = discord.Embed(
             title="⚠️ Ticket Inactivity",
@@ -119,7 +126,36 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---- GIVEAWAYS ----
+# ==== GIVEAWAY COMMAND ====
+@tree.command(name="giveaway", description="Start a giveaway")
+@app_commands.describe(prize="The prize", duration="Duration (e.g. 10s, 5m, 1h, 1d)")
+async def giveaway(interaction: discord.Interaction, prize: str, duration: str):
+    if not is_staff(interaction):
+        await interaction.response.send_message("You do not have permission to start giveaways.", ephemeral=True)
+        return
+
+    seconds = parse_duration(duration)
+    if seconds is None or seconds < 5:
+        await interaction.response.send_message("Invalid duration. Use formats like 10s, 5m, 1h, 1d.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🎉 Giveaway! 🎉", description=f"Prize: **{prize}**\nReact with 🎉 to enter!", color=discord.Color.gold())
+    embed.set_footer(text=f"Ends in {duration}")
+    msg = await interaction.channel.send(embed=embed)
+    await msg.add_reaction("🎉")
+
+    # Save giveaway info
+    giveaways[str(msg.id)] = {
+        "channel_id": interaction.channel.id,
+        "prize": prize,
+        "end_time": int(datetime.datetime.utcnow().timestamp()) + seconds,
+        "participants": [],
+    }
+    save_giveaways(giveaways)
+
+    await interaction.response.send_message("Giveaway started!", ephemeral=True)
+
+# ==== GIVEAWAY REACTION HANDLING ====
 @bot.event
 async def on_raw_reaction_add(payload):
     if str(payload.message_id) not in giveaways:
@@ -128,13 +164,19 @@ async def on_raw_reaction_add(payload):
         return
     if payload.user_id == bot.user.id:
         return
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    member = guild.get_member(payload.user_id)
+    if not member or member.bot:
+        return
     g = giveaways[str(payload.message_id)]
     if payload.user_id not in g["participants"]:
         g["participants"].append(payload.user_id)
-        await save_giveaways()
+        save_giveaways(giveaways)
 
-@tasks.loop(seconds=60)
-async def giveaway_check():
+@tasks.loop(seconds=10)
+async def giveaway_check_loop():
     now = int(datetime.datetime.utcnow().timestamp())
     to_remove = []
     for gid, g in giveaways.items():
@@ -144,7 +186,7 @@ async def giveaway_check():
                 to_remove.append(gid)
                 continue
             try:
-                message = await channel.fetch_message(int(gid))
+                msg = await channel.fetch_message(int(gid))
             except:
                 to_remove.append(gid)
                 continue
@@ -152,235 +194,66 @@ async def giveaway_check():
             if not participants:
                 await channel.send(f"Giveaway for **{g['prize']}** ended, no entries.")
             else:
-                winners = random.sample(participants, min(g["winners"], len(participants)))
-                await channel.send(f"🎉 Giveaway ended! Congrats: {' '.join(f'<@{w}>' for w in winners)} — Prize: **{g['prize']}**!")
+                winner_id = random.choice(participants)
+                winner = channel.guild.get_member(winner_id)
+                winner_mention = winner.mention if winner else f"<@{winner_id}>"
+                await channel.send(f"🎉 Congratulations {winner_mention}! You won **{g['prize']}**!")
             to_remove.append(gid)
     for gid in to_remove:
         giveaways.pop(gid, None)
     if to_remove:
-        await save_giveaways()
+        save_giveaways(giveaways)
 
-# ---- COGS ----
+# ==== REACTION ROLES ====
+class ReactionRolesView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(RoleToggleButton(ANNOUNCEMENT_ROLE_ID, "📢 Announcement Ping"))
+        self.add_item(RoleToggleButton(GIVEAWAY_ROLE_ID, "🎉 Giveaway Ping"))
+        self.add_item(RoleToggleButton(EVENT_ROLE_ID, "📆 Event Ping"))
+        self.add_item(RoleToggleButton(SSU_ROLE_ID, "🚨 SSU Ping"))
 
-class StaffCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+class RoleToggleButton(discord.ui.Button):
+    def __init__(self, role_id, label):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary)
+        self.role_id = role_id
 
-    @app_commands.command(name="promote")
-    @app_commands.check(is_staff)
-    async def promote(self, interaction, user: discord.Member, new_rank: str, reason: str):
-        e = discord.Embed(title="📈 Staff Promotion", color=discord.Color.green(), timestamp=datetime.datetime.utcnow())
-        e.add_field(name="User", value=user.mention)
-        e.add_field(name="New Rank", value=new_rank)
-        e.add_field(name="Reason", value=reason, inline=False)
-        e.add_field(name="By", value=interaction.user.mention)
-        await interaction.guild.get_channel(PROMOTION_CHANNEL_ID).send(embed=e)
-        await interaction.response.send_message(f"{user.mention} promoted.", ephemeral=True)
+    async def callback(self, interaction: discord.Interaction):
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("Role not found.", ephemeral=True)
+            return
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"Removed role {role.name}", ephemeral=True)
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"Added role {role.name}", ephemeral=True)
 
-    @app_commands.command(name="infract")
-    @app_commands.check(is_staff)
-    async def infract(self, interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
-        e = discord.Embed(title="⚠️ Staff Infraction", color=discord.Color.red(), timestamp=datetime.datetime.utcnow())
-        e.add_field(name="User", value=user.mention)
-        e.add_field(name="Punishment", value=punishment)
-        e.add_field(name="Reason", value=reason, inline=False)
-        e.add_field(name="By", value=interaction.user.mention)
-        e.add_field(name="Expires", value=expires)
-        await interaction.guild.get_channel(INFRACTION_CHANNEL_ID).send(embed=e)
-        await interaction.response.send_message(f"{user.mention} infracted.", ephemeral=True)
-
-    @app_commands.command(name="serverstart")
-    @app_commands.check(is_staff)
-    async def serverstart(self, interaction):
-        e = discord.Embed(
-            title="✅ Session Started",
-            description=(
-                "The Staff Team has started a session!\n\n"
-                "**Server Name:** Iowa State Roleplay\n"
-                "**In-game Code:** vcJJf\n\n"
-                "And have a great roleplay experience!"
-            ),
-            color=discord.Color.green()
-        )
-        await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(content=f"<@&{SSU_ROLE_ID}>", embed=e)
-        await interaction.response.send_message("Session started.", ephemeral=True)
-
-    @app_commands.command(name="serverstop")
-    @app_commands.check(is_staff)
-    async def serverstop(self, interaction):
-        e = discord.Embed(
-            title="⛔ Server Shut Down",
-            description=(
-                "The server is currently shut down.\n"
-                "Please do not join in-game under any circumstances unless told by SHR+\n"
-                "Please be patient and keep an eye out for our next session here!"
-            ),
-            color=discord.Color.red()
-        )
-        await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(embed=e)
-        await interaction.response.send_message("Session stopped.", ephemeral=True)
-
-class ReactionRolesCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    class RoleButton(discord.ui.Button):
-        def __init__(self, role_id, label):
-            super().__init__(label=label, style=discord.ButtonStyle.primary)
-            self.role_id = role_id
-
-        async def callback(self, interaction):
-            role = interaction.guild.get_role(self.role_id)
-            if role in interaction.user.roles:
-                await interaction.user.remove_roles(role)
-                await interaction.response.send_message(f"Removed {role.name}", ephemeral=True)
-            else:
-                await interaction.user.add_roles(role)
-                await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        channel = self.bot.get_channel(REACTION_CHANNEL_ID)
-        if channel:
-            view = discord.ui.View(timeout=None)
-            roles = {
-                SSU_ROLE_ID: "SSU Ping",
-                EVENT_ROLE_ID: "Event Ping",
-                ANNOUNCEMENT_ROLE_ID: "Announcement Ping",
-                GIVEAWAY_ROLE_ID: "Giveaway Ping",
-            }
-            for role_id, label in roles.items():
-                view.add_item(self.RoleButton(role_id, label))
-            # Only send the message once (try/catch in case of errors)
-            try:
-                await channel.send("Click to toggle pings:", view=view)
-            except Exception:
-                pass
-
-class EmbedCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="embed")
-    @app_commands.check(is_staff)
-    async def embed(self, interaction, channel: discord.TextChannel, title: str = None, description: str = None, image_url: str = None):
-        e = discord.Embed(
-            title=title or discord.Embed.Empty,
-            description=description or discord.Embed.Empty,
-            color=discord.Color.blue()
-        )
-        if image_url:
-            e.set_image(url=image_url)
-        await channel.send(embed=e)
-        await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
-
-class ReportCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="report")
-    async def report(self, interaction, staff_member: discord.Member, reason: str, anonymous: bool = True):
-        msg = (
-            f"Anonymous report:\nStaff: {staff_member}\nReason: {reason}"
-            if anonymous
-            else f"Report from {interaction.user}:\nStaff: {staff_member}\nReason: {reason}"
-        )
-        for oid in OWNER_IDS:
-            u = self.bot.get_user(oid)
-            if u:
-                try:
-                    await u.send(msg)
-                except Exception:
-                    pass
-        await interaction.response.send_message("Report sent.", ephemeral=True)
-
-class SuggestCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="suggest")
-    async def suggest(self, interaction, title: str, description: str, anonymous: bool = False):
-        e = discord.Embed(
-            title=title,
-            description=description,
-            color=discord.Color.gold(),
-            timestamp=datetime.datetime.utcnow()
-        )
-        e.set_footer(text=f"Suggested by {'Anonymous' if anonymous else interaction.user.display_name}")
-        ch = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
-        msg = await ch.send(embed=e)
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
-        await msg.add_reaction("🗨️")
-        await msg.create_thread(name=f"Suggestion: {title or 'Untitled'}", auto_archive_duration=1440)
-        await interaction.response.send_message("Suggestion posted!", ephemeral=True)
-
-class GiveawayCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="giveaway")
-    @app_commands.check(is_staff)
-    async def giveaway(self, interaction, duration: str, winners: int, prize: str):
-        sec = parse_duration(duration)
-        if not sec or sec < 10:
-            return await interaction.response.send_message("Invalid duration.", ephemeral=True)
-        end_time = int(datetime.datetime.utcnow().timestamp()) + sec
-        e = discord.Embed(
-            title="🎉 Giveaway!",
-            description=f"Prize: **{prize}**\nReact with 🎉 to enter!\nEnds <t:{end_time}:R>",
-            color=discord.Color.purple()
-        )
-        msg = await interaction.channel.send(embed=e)
-        await msg.add_reaction("🎉")
-        giveaways[str(msg.id)] = {
-            "message_id": msg.id,
-            "channel_id": msg.channel.id,
-            "prize": prize,
-            "host_id": interaction.user.id,
-            "winners": winners,
-            "end_time": end_time,
-            "participants": []
-        }
-        await save_giveaways()
-        await interaction.response.send_message("Giveaway started!", ephemeral=True)
-
-# ---- EVENTS ----
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-    # Leave any guild except MAIN_GUILD_ID
-    for g in bot.guilds:
-        if g.id != MAIN_GUILD_ID:
-            await g.leave()
-    g = bot.get_guild(MAIN_GUILD_ID)
-    if g:
-        await bot.tree.sync(guild=g)
-    giveaway_check.start()
+    print(f"Bot logged in as {bot.user} (ID: {bot.user.id})")
+    guild = bot.get_guild(MAIN_GUILD_ID)
+    if guild:
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} commands to guild {guild.name} ({guild.id})")
+    else:
+        print("Warning: Main guild not found.")
+    giveaway_check_loop.start()
 
-@bot.event
-async def on_raw_reaction_remove(payload):
-    if str(payload.message_id) not in giveaways:
-        return
-    if str(payload.emoji) != "🎉":
-        return
-    g = giveaways[str(payload.message_id)]
-    if payload.user_id in g.get("participants", []):
-        g["participants"].remove(payload.user_id)
-        await save_giveaways()
+    # Send reaction role message if not already present
+    channel = bot.get_channel(REACTION_CHANNEL_ID)
+    if channel:
+        async for msg in channel.history(limit=100):
+            if msg.author == bot.user and msg.content == "Click a button below to toggle pings:":
+                print("Reaction role message already exists, skipping send.")
+                break
+        else:
+            try:
+                view = ReactionRolesView()
+                await channel.send("Click a button below to toggle pings:", view=view)
+                print("Sent reaction role message.")
+            except Exception as e:
+                print(f"Failed to send reaction role message: {e}")
 
-# ---- STARTUP ----
-async def setup_cogs():
-    await bot.add_cog(StaffCog(bot))
-    await bot.add_cog(ReactionRolesCog(bot))
-    await bot.add_cog(EmbedCog(bot))
-    await bot.add_cog(ReportCog(bot))
-    await bot.add_cog(SuggestCog(bot))
-    await bot.add_cog(GiveawayCog(bot))
-
-async def main():
-    async with bot:
-        await setup_cogs()
-        await bot.start(TOKEN)
-
-asyncio.run(main())
+bot.run(TOKEN)
