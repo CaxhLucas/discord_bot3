@@ -34,6 +34,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -125,8 +126,62 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Your existing cogs and bot startup code will continue here...
-# (not repeated for brevity, but preserved in memory)
+# Reaction Role Handling
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.channel_id != REACTION_CHANNEL_ID:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+
+    member = guild.get_member(payload.user_id)
+    if not member or member.bot:
+        return
+
+    emoji = str(payload.emoji)
+    if emoji == "📢":
+        role = guild.get_role(ANNOUNCEMENT_ROLE_ID)
+    elif emoji == "🎉":
+        role = guild.get_role(GIVEAWAY_ROLE_ID)
+    elif emoji == "📆":
+        role = guild.get_role(EVENT_ROLE_ID)
+    elif emoji == "🚨":
+        role = guild.get_role(SSU_ROLE_ID)
+    else:
+        role = None
+
+    if role:
+        await member.add_roles(role)
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if payload.channel_id != REACTION_CHANNEL_ID:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+
+    member = guild.get_member(payload.user_id)
+    if not member:
+        return
+
+    emoji = str(payload.emoji)
+    if emoji == "📢":
+        role = guild.get_role(ANNOUNCEMENT_ROLE_ID)
+    elif emoji == "🎉":
+        role = guild.get_role(GIVEAWAY_ROLE_ID)
+    elif emoji == "📆":
+        role = guild.get_role(EVENT_ROLE_ID)
+    elif emoji == "🚨":
+        role = guild.get_role(SSU_ROLE_ID)
+    else:
+        role = None
+
+    if role:
+        await member.remove_roles(role)
 
 # At the end of your script
 bot.run(TOKEN)
