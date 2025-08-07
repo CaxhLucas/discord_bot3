@@ -8,13 +8,16 @@ import os
 import re
 import random
 
+
 # ---- CONFIG ----
 TOKEN = os.environ["DISCORD_TOKEN"]
+
 
 MAIN_GUILD_ID = 1371272556820041849
 BOD_ROLE_ID = 1371272557034209493
 SUPERVISOR_ROLE_IDS = [1371272557034209491, 1371272557034209496]
 OWNER_IDS = [902727710990811186, 1341152829967958114]
+
 
 PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
@@ -27,7 +30,9 @@ REACTION_CHANNEL_ID = 1371272557969281159
 LOGGING_CHANNEL_ID = 1371272557692452884
 SUGGESTION_CHANNEL_ID = 1401761820431355986
 
+
 GIVEAWAYS_DATA_FILE = "giveaways.json"
+
 
 # ---- INTENTS ----
 intents = discord.Intents.default()
@@ -37,22 +42,27 @@ intents.messages = True
 intents.message_content = True
 intents.reactions = True
 
+
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 # ---- HELPERS ----
 def is_staff(interaction: discord.Interaction) -> bool:
     roles = getattr(interaction.user, 'roles', [])
     return any(r.id == BOD_ROLE_ID or r.id in SUPERVISOR_ROLE_IDS for r in roles)
 
+
 def save_json(filename: str, data: dict):
     with open(filename, "w") as f:
         json.dump(data, f, indent=2)
+
 
 def load_json(filename: str) -> dict:
     if not os.path.exists(filename):
         return {}
     with open(filename, "r") as f:
         return json.load(f)
+
 
 def parse_duration(duration_str: str) -> int | None:
     duration_str = duration_str.lower().replace(" ", "")
@@ -62,11 +72,14 @@ def parse_duration(duration_str: str) -> int | None:
     amount, unit = int(match.group(1)), match.group(2)
     return {"s": amount, "m": amount*60, "h": amount*3600, "d": amount*86400}.get(unit)
 
+
 giveaways = load_json(GIVEAWAYS_DATA_FILE)
+
 
 # ---- GIVEAWAYS ----
 async def save_giveaways():
     save_json(GIVEAWAYS_DATA_FILE, giveaways)
+
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -80,6 +93,7 @@ async def on_raw_reaction_add(payload):
     if payload.user_id not in g["participants"]:
         g["participants"].append(payload.user_id)
         await save_giveaways()
+
 
 @tasks.loop(seconds=60)
 async def giveaway_check():
@@ -108,10 +122,12 @@ async def giveaway_check():
     if to_remove:
         await save_giveaways()
 
+
 # ---- COGS ----
 class StaffCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @app_commands.command(name="promote")
     @app_commands.check(is_staff)
@@ -124,6 +140,7 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(PROMOTION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message(f"{user.mention} promoted.", ephemeral=True)
 
+
     @app_commands.command(name="infract")
     @app_commands.check(is_staff)
     async def infract(self, interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
@@ -135,6 +152,7 @@ class StaffCog(commands.Cog):
         e.add_field(name="Expires", value=expires)
         await interaction.guild.get_channel(INFRACTION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message(f"{user.mention} infracted.", ephemeral=True)
+
 
     @app_commands.command(name="serverstart")
     @app_commands.check(is_staff)
@@ -152,6 +170,7 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(content=f"<@&{SSU_ROLE_ID}>", embed=e)
         await interaction.response.send_message("Session started.", ephemeral=True)
 
+
     @app_commands.command(name="serverstop")
     @app_commands.check(is_staff)
     async def serverstop(self, interaction):
@@ -167,9 +186,11 @@ class StaffCog(commands.Cog):
         await interaction.guild.get_channel(SESSION_CHANNEL_ID).send(embed=e)
         await interaction.response.send_message("Session stopped.", ephemeral=True)
 
+
 class ReactionRolesCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -189,10 +210,12 @@ class ReactionRolesCog(commands.Cog):
             except:
                 pass
 
+
     class RoleButton(discord.ui.Button):
         def __init__(self, role_id, label):
             super().__init__(label=label, style=discord.ButtonStyle.primary)
             self.role_id = role_id
+
 
         async def callback(self, interaction):
             role = interaction.guild.get_role(self.role_id)
@@ -203,9 +226,11 @@ class ReactionRolesCog(commands.Cog):
                 await interaction.user.add_roles(role)
                 await interaction.response.send_message(f"Added {role.name}", ephemeral=True)
 
+
 class EmbedCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @app_commands.command(name="embed")
     @app_commands.check(is_staff)
@@ -220,9 +245,11 @@ class EmbedCog(commands.Cog):
         await channel.send(embed=e)
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
+
 class ReportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @app_commands.command(name="report")
     async def report(self, interaction, staff_member: discord.Member, reason: str, anonymous: bool = True):
@@ -240,9 +267,11 @@ class ReportCog(commands.Cog):
                     pass
         await interaction.response.send_message("Report sent.", ephemeral=True)
 
+
 class SuggestCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @app_commands.command(name="suggest")
     async def suggest(self, interaction, title: str, description: str, anonymous: bool = False):
@@ -261,9 +290,11 @@ class SuggestCog(commands.Cog):
         await msg.create_thread(name=f"Suggestion: {title or 'Untitled'}", auto_archive_duration=1440)
         await interaction.response.send_message("Suggestion posted!", ephemeral=True)
 
+
 class GiveawayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
 
     @app_commands.command(name="giveaway")
     @app_commands.check(is_staff)
@@ -291,6 +322,7 @@ class GiveawayCog(commands.Cog):
         await save_giveaways()
         await interaction.response.send_message("Giveaway started!", ephemeral=True)
 
+
 # ---- EVENTS ----
 @bot.event
 async def on_ready():
@@ -303,11 +335,13 @@ async def on_ready():
         await bot.tree.sync(guild=g)
     giveaway_check.start()
 
+
 @bot.event
 async def on_message(msg):
     if msg.author.bot:
         return
     await bot.process_commands(msg)
+
 
 # ---- START ----
 async def setup_cogs():
@@ -318,9 +352,15 @@ async def setup_cogs():
     await bot.add_cog(SuggestCog(bot))
     await bot.add_cog(GiveawayCog(bot))
 
+
 async def main():
     async with bot:
         await setup_cogs()
         await bot.start(TOKEN)
 
+
 asyncio.run(main())
+
+
+
+
