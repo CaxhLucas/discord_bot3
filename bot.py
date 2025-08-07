@@ -27,13 +27,6 @@ EVENT_ROLE_ID = 1371272556820041853
 ANNOUNCEMENT_ROLE_ID = 1371272556820041852
 GIVEAWAY_ROLE_ID = 1400878647753048164
 
-LEVEL_ROLES = {
-    1: 1401750387542855710,
-    5: 1401750539229728919,
-    10: 1401750605822824478,
-    20: 1401750676911947837,
-}
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -335,39 +328,6 @@ class GiveawayCog(commands.Cog):
         await message.edit(embed=embed, view=None)
         self.active_giveaways[message_id]["ended"] = True
 
-class LevelingCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.user_message_counts = {}  # user_id: count
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot or message.guild is None or message.guild.id != MAIN_GUILD_ID:
-            return
-        user_id = message.author.id
-        count = self.user_message_counts.get(user_id, 0) + 1
-        self.user_message_counts[user_id] = count
-        sorted_levels = sorted(LEVEL_ROLES.keys(), reverse=True)
-        user_roles_ids = [role.id for role in message.author.roles]
-        for lvl in sorted_levels:
-            if count >= lvl and LEVEL_ROLES[lvl] not in user_roles_ids:
-                role = message.guild.get_role(LEVEL_ROLES[lvl])
-                if role:
-                    await message.author.add_roles(role, reason="Level up reward")
-                    msg = await message.channel.send(
-                        f"🎉 Congrats {message.author.mention}, you've leveled up to **Level {lvl}**!",
-                        delete_after=10
-                    )
-                    # Remove old level roles after 10 seconds
-                    await asyncio.sleep(10)
-                    # Only remove other level roles, not all roles
-                    for level_value, role_id in LEVEL_ROLES.items():
-                        if role_id in [r.id for r in message.author.roles] and role_id != LEVEL_ROLES[lvl]:
-                            old_role = message.guild.get_role(role_id)
-                            if old_role:
-                                await message.author.remove_roles(old_role, reason="Level up: remove old level role")
-                break
-
 class ReactionRoleButtons(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -418,7 +378,6 @@ async def on_ready():
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(ReportCog(bot))
     await bot.add_cog(GiveawayCog(bot))
-    await bot.add_cog(LevelingCog(bot))
     await bot.add_cog(SuggestionCog(bot))
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
