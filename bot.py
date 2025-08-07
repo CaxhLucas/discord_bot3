@@ -8,7 +8,7 @@ import asyncio
 import json
 
 # ====== CONFIG =======
-TOKEN = os.environ["DISCORD_TOKEN"]
+TOKEN = os.environ.get("DISCORD_TOKEN")
 MAIN_GUILD_ID = 1371272556820041849
 
 BOD_ROLE_ID = 1371272557034209493
@@ -37,16 +37,12 @@ intents.guilds = True
 intents.reactions = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
 
+# ====== HELPERS =======
 def is_staff(interaction: discord.Interaction) -> bool:
     user_roles = [role.id for role in interaction.user.roles]
     return any(role_id in STAFF_ROLE_IDS for role_id in user_roles)
-
-def is_bod(interaction: discord.Interaction) -> bool:
-    return BOD_ROLE_ID in [role.id for role in interaction.user.roles]
-
-def is_owner(user_id: int) -> bool:
-    return user_id in OWNER_IDS
 
 def parse_duration(duration_str: str):
     unit = duration_str[-1]
@@ -61,22 +57,7 @@ def parse_duration(duration_str: str):
         return amount * 86400
     return None
 
-def load_giveaways():
-    if not os.path.isfile(GIVEAWAY_FILE):
-        with open(GIVEAWAY_FILE, "w") as f:
-            json.dump({}, f)
-    with open(GIVEAWAY_FILE, "r") as f:
-        try:
-            data = json.load(f)
-            return data
-        except Exception:
-            return {}
-
-def save_giveaways(data):
-    with open(GIVEAWAY_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-# Message trigger handling
+# ====== MESSAGE TRIGGERS =======
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -126,7 +107,36 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Reaction Role Handling
+# ====== GIVEAWAY SYSTEM =======
+@tree.command(name="giveaway", description="Start a giveaway")
+@app_commands.describe(prize="The prize", duration="Duration (e.g. 10s, 5m, 1h, 1d)")
+async def giveaway(interaction: discord.Interaction, prize: str, duration: str):
+    if not is_staff(interaction):
+        await interaction.response.send_message("You do not have permission.", ephemeral=True)
+        return
+
+    seconds = parse_duration(duration)
+    if seconds is None:
+        await interaction.response.send_message("Invalid duration format.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🎉 Giveaway! 🎉", description=f"Prize: **{prize}**\nReact with 🎉 to enter!", color=discord.Color.gold())
+    embed.set_footer(text=f"Ends in {duration}")
+    msg = await interaction.channel.send(embed=embed)
+    await msg.add_reaction("🎉")
+    await interaction.response.send_message("Giveaway started!", ephemeral=True)
+
+    await asyncio.sleep(seconds)
+    new_msg = await interaction.channel.fetch_message(msg.id)
+    users = [u async for u in new_msg.reactions[0].users() if not u.bot]
+
+    if users:
+        winner = random.choice(users)
+        await interaction.channel.send(f"🎉 Congratulations {winner.mention}! You won **{prize}**!")
+    else:
+        await interaction.channel.send("No valid entries, giveaway cancelled.")
+
+# ====== REACTION ROLES =======
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.channel_id != REACTION_CHANNEL_ID:
@@ -183,5 +193,10 @@ async def on_raw_reaction_remove(payload):
     if role:
         await member.remove_roles(role)
 
-# At the end of your script
+# ====== READY =======
+@bot.event
+async def on_ready():
+    await tree.sync(guild=discord.Object(id=MAIN_GUILD_ID))
+    print(f"Bot is online as {bot.user}")
+
 bot.run(TOKEN)
