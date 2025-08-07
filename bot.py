@@ -5,6 +5,7 @@ import datetime
 import os
 import random
 import asyncio
+import json
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -26,6 +27,8 @@ SSU_ROLE_ID = 1371272556820041854
 EVENT_ROLE_ID = 1371272556820041853
 ANNOUNCEMENT_ROLE_ID = 1371272556820041852
 GIVEAWAY_ROLE_ID = 1400878647753048164
+
+GIVEAWAY_FILE = "giveaways.json"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -56,6 +59,21 @@ def parse_duration(duration_str: str):
     elif unit == "d":
         return amount * 86400
     return None
+
+def load_giveaways():
+    if not os.path.isfile(GIVEAWAY_FILE):
+        with open(GIVEAWAY_FILE, "w") as f:
+            json.dump({}, f)
+    with open(GIVEAWAY_FILE, "r") as f:
+        try:
+            data = json.load(f)
+            return data
+        except Exception:
+            return {}
+
+def save_giveaways(data):
+    with open(GIVEAWAY_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 class StaffCommands(commands.Cog):
     def __init__(self, bot):
@@ -174,90 +192,33 @@ class SayCog(commands.Cog):
             f"Message sent to {channel.mention}.", ephemeral=True
         )
 
-class ReportCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="report", description="Report a staff member anonymously")
-    @app_commands.describe(
-        user="Staff member to report",
-        reason="Reason for report"
-    )
-    async def report(self, interaction: discord.Interaction, user: discord.Member, reason: str):
-        embed = discord.Embed(
-            title="📢 Staff Report",
-            description=f"**User reported:** {user.mention}\n**Reason:** {reason}",
-            color=discord.Color.orange(),
-            timestamp=datetime.datetime.utcnow()
-        )
-        owners = [self.bot.get_user(owner_id) for owner_id in OWNER_IDS]
-        sent = False
-        for owner in owners:
-            if owner:
-                try:
-                    await owner.send(embed=embed)
-                    sent = True
-                except:
-                    pass
-        if sent:
-            await interaction.response.send_message("Report sent to the owner(s). Thank you.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Failed to send report. Owners might have DMs closed.", ephemeral=True)
-
-class SuggestionCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="suggest", description="Submit a suggestion")
-    @app_commands.describe(
-        name="Your name (optional for anonymous)",
-        anonymous="Send anonymously?",
-        title="Suggestion title",
-        description="Suggestion description",
-        image_url="Optional image URL"
-    )
-    async def suggest(self, interaction: discord.Interaction, name: str = None, anonymous: bool = False, title: str = None, description: str = None, image_url: str = None):
-        sender = "Anonymous" if anonymous else (name or interaction.user.display_name)
-        embed = discord.Embed(
-            title=title or "Suggestion",
-            description=description or "No description provided.",
-            color=discord.Color.blue(),
-            timestamp=datetime.datetime.utcnow()
-        )
-        embed.set_author(name=sender)
-        if image_url:
-            embed.set_image(url=image_url)
-        suggestion_channel = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
-        message = await suggestion_channel.send(embed=embed)
-        await message.create_thread(name=f"Suggestion: {title or 'No Title'}", auto_archive_duration=60)
-        await interaction.response.send_message("Suggestion submitted.", ephemeral=True)
-
 class GiveawayView(discord.ui.View):
-    def __init__(self, cog, winners):
+    def __init__(self, cog, message_id):
         super().__init__(timeout=None)
         self.cog = cog
-        self.winners = winners
+        self.message_id = message_id
 
     @discord.ui.button(label="Enter Giveaway", style=discord.ButtonStyle.success, custom_id="giveaway_enter")
     async def enter(self, interaction: discord.Interaction, button: discord.ui.Button):
-        giveaway = self.cog.active_giveaways.get(interaction.message.id)
+        giveaway = self.cog.active_giveaways.get(str(self.message_id))
         if giveaway is None or giveaway.get("ended"):
             return await interaction.response.send_message("This giveaway has ended.", ephemeral=True)
-        if interaction.user.id in giveaway["participants"]:
+        if str(interaction.user.id) in giveaway["participants"]:
             return await interaction.response.send_message("You already entered!", ephemeral=True)
-        giveaway["participants"].add(interaction.user.id)
+        giveaway["participants"].append(str(interaction.user.id))
+        self.cog.persist()
         await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
     @discord.ui.button(label="Show Entrants", style=discord.ButtonStyle.secondary, custom_id="giveaway_show_entrants")
     async def show_entrants(self, interaction: discord.Interaction, button: discord.ui.Button):
-        giveaway = self.cog.active_giveaways.get(interaction.message.id)
+        giveaway = self.cog.active_giveaways.get(str(self.message_id))
         if giveaway is None:
             return await interaction.response.send_message("Giveaway not found.", ephemeral=True)
         if not giveaway["participants"]:
             return await interaction.response.send_message("No one has entered yet.", ephemeral=True)
         mentions = []
         for uid in giveaway["participants"]:
-            member = interaction.guild.get_member(uid)
+            member = interaction.guild.get_member(int(uid))
             if member:
                 mentions.append(member.mention)
             else:
@@ -268,7 +229,10 @@ class GiveawayView(discord.ui.View):
 class GiveawayCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.active_giveaways = {}  # message_id: giveaway data
+        self.active_giveaways = load_giveaways() # message_id (str): giveaway data
+
+    def persist(self):
+        save_giveaways(self.active_giveaways)
 
     @app_commands.command(name="giveaway", description="Start a giveaway (BOD only)")
     @app_commands.check(is_bod)
@@ -282,57 +246,75 @@ class GiveawayCog(commands.Cog):
         duration_seconds = parse_duration(duration)
         if duration_seconds is None:
             return await interaction.response.send_message("Invalid duration format! Use 10m, 1h, 1d etc.", ephemeral=True)
+        end_time = int(discord.utils.utcnow().timestamp() + duration_seconds)
         embed = discord.Embed(
             title="🎉 GIVEAWAY 🎉",
-            description=f"Prize: **{prize}**\nHosted by: {interaction.user.mention}\nEnds: <t:{int((discord.utils.utcnow().timestamp() + duration_seconds))}:R>",
+            description=f"Prize: **{prize}**\nHosted by: {interaction.user.mention}\nEnds: <t:{end_time}:R>",
             color=discord.Color.purple(),
             timestamp=datetime.datetime.utcnow()
         )
-        view = GiveawayView(self, winners)
-        giveaway_message = await channel.send(embed=embed, view=view)
-        self.active_giveaways[giveaway_message.id] = {
+        giveaway_message = await channel.send(embed=embed, view=GiveawayView(self, 0)) # Temporary message_id
+        # Update view with correct message id
+        view = GiveawayView(self, giveaway_message.id)
+        await giveaway_message.edit(view=view)
+        self.active_giveaways[str(giveaway_message.id)] = {
             "channel_id": channel.id,
             "prize": prize,
             "winners": winners,
-            "end_time": discord.utils.utcnow().timestamp() + duration_seconds,
+            "end_time": end_time,
             "message_id": giveaway_message.id,
-            "participants": set(),
+            "participants": [],
             "ended": False,
             "host_id": interaction.user.id,
         }
+        self.persist()
         await interaction.response.send_message(f"Giveaway started in {channel.mention}", ephemeral=True)
 
     @tasks.loop(seconds=30)
     async def giveaway_checker(self):
-        now = discord.utils.utcnow().timestamp()
-        for message_id, giveaway in list(self.active_giveaways.items()):
+        now = int(discord.utils.utcnow().timestamp())
+        to_end = []
+        for msg_id, giveaway in self.active_giveaways.items():
             if not giveaway["ended"] and giveaway["end_time"] <= now:
-                await self.end_giveaway(message_id)
-                giveaway["ended"] = True
+                to_end.append(msg_id)
+        for msg_id in to_end:
+            await self.end_giveaway(msg_id)
 
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.giveaway_checker.is_running():
             self.giveaway_checker.start()
+        # Re-add views for un-ended giveaways
+        for msg_id, giveaway in self.active_giveaways.items():
+            if not giveaway.get("ended"):
+                channel = self.bot.get_channel(giveaway["channel_id"])
+                if channel:
+                    try:
+                        message = await channel.fetch_message(int(msg_id))
+                        view = GiveawayView(self, int(msg_id))
+                        await message.edit(view=view)
+                    except Exception:
+                        pass
 
     async def end_giveaway(self, message_id):
-        giveaway = self.active_giveaways.get(message_id)
+        giveaway = self.active_giveaways.get(str(message_id))
         if not giveaway or giveaway.get("ended"):
             return
         channel = self.bot.get_channel(giveaway["channel_id"])
         if not channel:
             return
         try:
-            message = await channel.fetch_message(message_id)
+            message = await channel.fetch_message(int(message_id))
         except:
             return
-        participants = list(giveaway["participants"])
+        participants = giveaway["participants"]
         winners_count = giveaway["winners"]
+        text = ""
         if len(participants) == 0:
             text = f"No participants for giveaway **{giveaway['prize']}**."
         else:
-            winners = random.sample(participants, min(winners_count, len(participants)))
-            winner_mentions = ", ".join(f"<@{winner}>" for winner in winners)
+            winner_ids = random.sample(participants, min(winners_count, len(participants)))
+            winner_mentions = ", ".join(f"<@{winner}>" for winner in winner_ids)
             text = f"🎉 Congratulations {winner_mentions}! You won **{giveaway['prize']}**!"
         embed = discord.Embed(
             title="🎉 GIVEAWAY ENDED 🎉",
@@ -341,47 +323,8 @@ class GiveawayCog(commands.Cog):
             timestamp=datetime.datetime.utcnow()
         )
         await message.edit(embed=embed, view=None)
-        self.active_giveaways[message_id]["ended"] = True
-
-class ReactionRoleButtons(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="SSU Ping", style=discord.ButtonStyle.primary, custom_id="rr_ssu")
-    async def ssu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await toggle_role(interaction, SSU_ROLE_ID)
-
-    @discord.ui.button(label="Giveaway Ping", style=discord.ButtonStyle.primary, custom_id="rr_giveaway")
-    async def giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await toggle_role(interaction, GIVEAWAY_ROLE_ID)
-
-    @discord.ui.button(label="Announcement Ping", style=discord.ButtonStyle.primary, custom_id="rr_announcement")
-    async def announcement(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await toggle_role(interaction, ANNOUNCEMENT_ROLE_ID)
-
-    @discord.ui.button(label="Event Ping", style=discord.ButtonStyle.primary, custom_id="rr_event")
-    async def event(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await toggle_role(interaction, EVENT_ROLE_ID)
-
-async def toggle_role(interaction: discord.Interaction, role_id: int):
-    role = interaction.guild.get_role(role_id)
-    if role in interaction.user.roles:
-        await interaction.user.remove_roles(role)
-        await interaction.response.send_message(f"Removed {role.name} role.", ephemeral=True)
-    else:
-        await interaction.user.add_roles(role)
-        await interaction.response.send_message(f"Added {role.name} role.", ephemeral=True)
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error):
-    log_channel = bot.get_channel(LOGGING_CHANNEL_ID)
-    if isinstance(error, app_commands.MissingRole):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-        if log_channel:
-            await log_channel.send(f"{interaction.user} tried to use {interaction.command} without permission.")
-    else:
-        if log_channel:
-            await log_channel.send(f"Error in command {interaction.command} by {interaction.user}: {error}")
+        self.active_giveaways[str(message_id)]["ended"] = True
+        self.persist()
 
 @bot.event
 async def on_ready():
@@ -392,16 +335,11 @@ async def on_ready():
             await guild.leave()
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(SayCog(bot))
-    await bot.add_cog(ReportCog(bot))
     await bot.add_cog(GiveawayCog(bot))
-    await bot.add_cog(SuggestionCog(bot))
+    # Add other cogs here as needed...
+
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
-    view = ReactionRoleButtons()
-    channel = bot.get_channel(REACTION_CHANNEL_ID)
-    if channel:
-        await channel.purge(limit=5)
-        await channel.send("Click the buttons below to get or remove a ping role:", view=view)
 
 bot.run(TOKEN)
