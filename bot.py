@@ -159,6 +159,21 @@ class StaffCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
+class SayCog(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="say", description="Send a message as the bot")
+    @app_commands.describe(
+        channel="Channel to send the message in",
+        message="The message to send"
+    )
+    async def say(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+        await channel.send(message)
+        await interaction.response.send_message(
+            f"Message sent to {channel.mention}.", ephemeral=True
+        )
+
 class ReportCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -376,6 +391,7 @@ async def on_ready():
             print(f"Leaving unauthorized guild: {guild.name}")
             await guild.leave()
     await bot.add_cog(StaffCommands(bot))
+    await bot.add_cog(SayCog(bot))
     await bot.add_cog(ReportCog(bot))
     await bot.add_cog(GiveawayCog(bot))
     await bot.add_cog(SuggestionCog(bot))
