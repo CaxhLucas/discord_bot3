@@ -21,8 +21,8 @@ SUGGESTION_CHANNEL_ID = 1401761820431355986
 
 SSU_ROLE_ID = 1371272556820041854
 
-SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
-SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
+SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405985586510041189/Web_Photo_Editor_1.jpg?ex=68a0d19d&is=689f801d&hm=fed6f142bfdcb4640e1f6b1213e09fe53a4426981b8ff4525f7fda0fe474881d&=&format=webp"
+SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405985586267033630/serverShut-Picsart-AiImageEnhancer.webp?ex=68a0d19d&is=689f801d&hm=ddf8bbdf2d357cf2f507329e30706a785c0e3ee7d6c8f970dedc888845eb711e&=&format=webp"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -191,3 +191,4 @@ async def on_ready():
     print("Slash commands synced.")
 
 bot.run(TOKEN)
+
