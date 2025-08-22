@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
+import datetime
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -187,33 +188,62 @@ class PublicCommands(commands.Cog):
 async def on_ready():
     print(f"Logged in as {bot.user}")
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
+    # Copy all global commands to this guild
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
 
+    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
 
-# ====== AUTO RESPONSES =======
+# ====== AUTO-RESPONDER (DELETES MESSAGE) =======
 @bot.event
-async def on_message(message: discord.Message):
+async def on_message(message):
     if message.author.bot:
         return
 
-    content = message.content.lower()
+    # Trigger phrases
+    triggers = {
+        "-inactive": discord.Embed(
+            title="⚠️ Ticket Inactivity",
+            description="This ticket will be automatically closed within 24 hours of inactivity.",
+            color=discord.Color.orange()
+        ),
+        "-game": discord.Embed(
+            title="Here is some in-game information!",
+            description=(
+                "To join in-game, follow these steps:\n"
+                "1. Make sure to wait for an SSU.\n"
+                "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
+                "3. In the top right of the screen, click the 3 lines.\n"
+                "4. Go to \"servers.\"\n"
+                "5. Click \"Join by Code.\"\n"
+                "6. Put in the code \"vcJJf\"\n"
+                "7. And have a great time!"
+            ),
+            color=discord.Color.blue()
+        ),
+        "-apply": discord.Embed(
+            title="📋 Staff Applications",
+            description="To apply for staff, please visit <#1371272557969281166> !",
+            color=discord.Color.green()
+        ),
+        "-help": discord.Embed(
+            title="❓ Need Assistance?",
+            description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
+            color=discord.Color.blurple()
+        )
+    }
 
-    if content.startswith("-inactive"):
-        await message.channel.send("📌 To mark yourself inactive, please DM a SHR+ with the reason and expected return date.")
+    content = message.content.strip().lower()
+    if content in triggers:
+        try:
+            await message.delete()
+        except:
+            pass
+        await message.channel.send(embed=triggers[content])
+        return
 
-    elif content.startswith("-apply"):
-        await message.channel.send("📝 Interested in joining staff? Apply here: [Staff Application Link]")
-
-    elif content.startswith("-game"):
-        await message.channel.send("🎮 To join sessions, watch for `serverstart` pings and use the in-game code posted in announcements.")
-
-    elif content.startswith("-help"):
-        await message.channel.send("❓ Need help? Contact a SHR+ or use `/report` to submit an issue.")
-
-    # Ensure normal commands still work
     await bot.process_commands(message)
 
 bot.run(TOKEN)
