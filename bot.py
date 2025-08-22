@@ -60,36 +60,37 @@ class StaffCommands(commands.Cog):
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
+    # Updated infract command
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
-@app_commands.check(is_bod)
-@app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
-async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
-    embed = discord.Embed(
-        title="⚠️ Staff Infraction",
-        color=discord.Color.red(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="User", value=user.mention, inline=True)
-    embed.add_field(name="Punishment", value=punishment, inline=True)
-    embed.add_field(name="Reason", value=reason, inline=False)
-    embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Expires", value=expires, inline=True)
+    @app_commands.check(is_bod)
+    @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
+    async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
+        embed = discord.Embed(
+            title="⚠️ Staff Infraction",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="Punishment", value=punishment, inline=True)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Expires", value=expires, inline=True)
 
-    # Send to infraction channel (if visible)
-    channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
-    if channel:
+        # Send to infraction channel (if visible)
+        channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
+        if channel:
+            try:
+                await channel.send(content=user.mention, embed=embed)
+            except discord.Forbidden:
+                pass  # user might not have permission to see the channel
+
+        # Always DM the staff member
         try:
-            await channel.send(content=user.mention, embed=embed)
+            await user.send(embed=embed)
         except discord.Forbidden:
-            pass  # user might not have permission to see the channel
+            pass  # user may have DMs closed
 
-    # Always DM the staff member
-    try:
-        await user.send(embed=embed)
-    except discord.Forbidden:
-        pass  # user may have DMs closed
-
-    await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
+        await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
 
     @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_bod)
@@ -188,80 +189,19 @@ class PublicCommands(commands.Cog):
                     pass
         await interaction.response.send_message("Your report has been sent to the owners.", ephemeral=True)
 
-# ====== AUTO RESPONDER =======
-class AutoResponder(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot:
-            return
-
-        content = message.content.strip().lower()
-
-        if content.startswith("-"):
-            await message.delete()  # delete immediately
-
-        if content == "-inactive":
-            embed = discord.Embed(
-                title="⚠️ Ticket Inactivity",
-                description="This ticket will be automatically closed within 24 hours of inactivity.",
-                color=discord.Color.orange()
-            )
-            await message.channel.send(embed=embed)
-
-        elif content == "-game":
-            embed = discord.Embed(
-                title="Here is some in-game information!",
-                description=(
-                    "To join in-game, follow these steps:\n"
-                    "1. Make sure to wait for an SSU.\n"
-                    "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
-                    "3. In the top right of the screen, click the 3 lines.\n"
-                    "4. Go to \"servers.\"\n"
-                    "5. Click \"Join by Code.\"\n"
-                    "6. Put in the code \"vcJJf\"\n"
-                    "7. And have a great time!"
-                ),
-                color=discord.Color.blue()
-            )
-            await message.channel.send(embed=embed)
-
-        elif content == "-apply":
-            embed = discord.Embed(
-                title="📋 Staff Applications",
-                description="To apply for staff, please visit <#1371272557969281166> !",
-                color=discord.Color.green()
-            )
-            await message.channel.send(embed=embed)
-
-        elif content == "-help":
-            embed = discord.Embed(
-                title="❓ Need Assistance?",
-                description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
-                color=discord.Color.blurple()
-            )
-            await message.channel.send(embed=embed)
-
-        await bot.process_commands(message)  # ensure commands still work
-
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    # Add cogs BEFORE syncing commands
+    # Add cogs before syncing
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
-    await bot.add_cog(AutoResponder(bot))
 
-    # Register commands in the guild AFTER cogs are added
+    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
-
-    print("Slash commands synced and ready.")
+    print("Slash commands synced.")
 
 bot.run(TOKEN)
-
