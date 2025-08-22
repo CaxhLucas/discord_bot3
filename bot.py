@@ -61,22 +61,35 @@ class StaffCommands(commands.Cog):
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
-    @app_commands.check(is_bod)
-    @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
-    async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
-        embed = discord.Embed(
-            title="⚠️ Staff Infraction",
-            color=discord.Color.red(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.add_field(name="User", value=user.mention, inline=True)
-        embed.add_field(name="Punishment", value=punishment, inline=True)
-        embed.add_field(name="Reason", value=reason, inline=False)
-        embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Expires", value=expires, inline=True)
-        channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
-        await channel.send(content=user.mention, embed=embed)
-        await interaction.response.send_message(f"Infraction logged and {user.display_name} has been pinged.", ephemeral=True)
+@app_commands.check(is_bod)
+@app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
+async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
+    embed = discord.Embed(
+        title="⚠️ Staff Infraction",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="User", value=user.mention, inline=True)
+    embed.add_field(name="Punishment", value=punishment, inline=True)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Expires", value=expires, inline=True)
+
+    # Send to infraction channel (if visible)
+    channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
+    if channel:
+        try:
+            await channel.send(content=user.mention, embed=embed)
+        except discord.Forbidden:
+            pass  # user might not have permission to see the channel
+
+    # Always DM the staff member
+    try:
+        await user.send(embed=embed)
+    except discord.Forbidden:
+        pass  # user may have DMs closed
+
+    await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
 
     @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_bod)
@@ -251,3 +264,4 @@ async def on_ready():
     print("Slash commands synced and ready.")
 
 bot.run(TOKEN)
+
