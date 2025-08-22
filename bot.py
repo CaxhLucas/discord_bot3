@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
-import datetime
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -21,8 +20,8 @@ SUGGESTION_CHANNEL_ID = 1401761820431355986
 
 SSU_ROLE_ID = 1371272556820041854
 
-SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405985586510041189/Web_Photo_Editor_1.jpg?ex=68a0d19d&is=689f801d&hm=fed6f142bfdcb4640e1f6b1213e09fe53a4426981b8ff4525f7fda0fe474881d&=&format=webp"
-SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405985586267033630/serverShut-Picsart-AiImageEnhancer.webp?ex=68a0d19d&is=689f801d&hm=ddf8bbdf2d357cf2f507329e30706a785c0e3ee7d6c8f970dedc888845eb711e&=&format=webp"
+SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
+SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,8 +29,8 @@ intents.members = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
 
-# ====== PERMISSION CHECKS =======
 def is_staff(interaction: discord.Interaction) -> bool:
     return any(role.id in STAFF_ROLES for role in interaction.user.roles)
 
@@ -43,6 +42,7 @@ class StaffCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # Promote
     @app_commands.command(name="promote", description="Promote a staff member")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member to promote", new_rank="New rank", reason="Reason for promotion")
@@ -60,6 +60,7 @@ class StaffCommands(commands.Cog):
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
+    # Infraction
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
@@ -78,6 +79,7 @@ class StaffCommands(commands.Cog):
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been pinged.", ephemeral=True)
 
+    # Server start
     @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_bod)
     async def serverstart(self, interaction: discord.Interaction):
@@ -97,6 +99,7 @@ class StaffCommands(commands.Cog):
         await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
         await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
 
+    # Server stop
     @app_commands.command(name="serverstop", description="End a session")
     @app_commands.check(is_bod)
     async def serverstop(self, interaction: discord.Interaction):
@@ -111,6 +114,7 @@ class StaffCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message("Session ended.", ephemeral=True)
 
+    # Say
     @app_commands.command(name="say", description="Send a message as the bot")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Channel", message="Message content")
@@ -118,6 +122,7 @@ class StaffCommands(commands.Cog):
         await channel.send(message)
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
 
+    # Embled with optional image
     @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
@@ -139,6 +144,7 @@ class PublicCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # Suggest
     @app_commands.command(name="suggest", description="Submit a suggestion")
     @app_commands.describe(title="Suggestion title", description="Suggestion details", image_url="Optional image", anonymous="Remain anonymous?")
     async def suggest(self, interaction: discord.Interaction, title: str, description: str, image_url: str = None, anonymous: bool = False):
@@ -156,6 +162,7 @@ class PublicCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
+    # Report
     @app_commands.command(name="report", description="Report a staff member")
     @app_commands.describe(message="Report content")
     async def report(self, interaction: discord.Interaction, message: str):
@@ -179,16 +186,34 @@ class PublicCommands(commands.Cog):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-
-    # Add cogs before syncing
-    await bot.add_cog(StaffCommands(bot))
-    await bot.add_cog(PublicCommands(bot))
-
-    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
-    print("Slash commands synced.")
+
+    await bot.add_cog(StaffCommands(bot))
+    await bot.add_cog(PublicCommands(bot))
+
+# ====== AUTO RESPONSES =======
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    content = message.content.lower()
+
+    if content.startswith("-inactive"):
+        await message.channel.send("📌 To mark yourself inactive, please DM a SHR+ with the reason and expected return date.")
+
+    elif content.startswith("-apply"):
+        await message.channel.send("📝 Interested in joining staff? Apply here: [Staff Application Link]")
+
+    elif content.startswith("-game"):
+        await message.channel.send("🎮 To join sessions, watch for `serverstart` pings and use the in-game code posted in announcements.")
+
+    elif content.startswith("-help"):
+        await message.channel.send("❓ Need help? Contact a SHR+ or use `/report` to submit an issue.")
+
+    # Ensure normal commands still work
+    await bot.process_commands(message)
 
 bot.run(TOKEN)
-
