@@ -30,8 +30,8 @@ intents.members = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
 
+# ====== PERMISSION CHECKS =======
 def is_staff(interaction: discord.Interaction) -> bool:
     return any(role.id in STAFF_ROLES for role in interaction.user.roles)
 
@@ -43,7 +43,6 @@ class StaffCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # Promote
     @app_commands.command(name="promote", description="Promote a staff member")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member to promote", new_rank="New rank", reason="Reason for promotion")
@@ -61,7 +60,6 @@ class StaffCommands(commands.Cog):
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
-    # Infraction
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
@@ -80,7 +78,6 @@ class StaffCommands(commands.Cog):
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been pinged.", ephemeral=True)
 
-    # Server start
     @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_bod)
     async def serverstart(self, interaction: discord.Interaction):
@@ -100,7 +97,6 @@ class StaffCommands(commands.Cog):
         await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
         await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
 
-    # Server stop
     @app_commands.command(name="serverstop", description="End a session")
     @app_commands.check(is_bod)
     async def serverstop(self, interaction: discord.Interaction):
@@ -115,7 +111,6 @@ class StaffCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message("Session ended.", ephemeral=True)
 
-    # Say
     @app_commands.command(name="say", description="Send a message as the bot")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Channel", message="Message content")
@@ -123,7 +118,6 @@ class StaffCommands(commands.Cog):
         await channel.send(message)
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
 
-    # Embled with optional image
     @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
@@ -145,7 +139,6 @@ class PublicCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # Suggest
     @app_commands.command(name="suggest", description="Submit a suggestion")
     @app_commands.describe(title="Suggestion title", description="Suggestion details", image_url="Optional image", anonymous="Remain anonymous?")
     async def suggest(self, interaction: discord.Interaction, title: str, description: str, image_url: str = None, anonymous: bool = False):
@@ -163,7 +156,6 @@ class PublicCommands(commands.Cog):
         await channel.send(embed=embed)
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
-    # Report
     @app_commands.command(name="report", description="Report a staff member")
     @app_commands.describe(message="Report content")
     async def report(self, interaction: discord.Interaction, message: str):
@@ -183,67 +175,79 @@ class PublicCommands(commands.Cog):
                     pass
         await interaction.response.send_message("Your report has been sent to the owners.", ephemeral=True)
 
+# ====== AUTO RESPONDER =======
+class AutoResponder(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot:
+            return
+
+        content = message.content.strip().lower()
+
+        if content.startswith("-"):
+            await message.delete()  # delete immediately
+
+        if content == "-inactive":
+            embed = discord.Embed(
+                title="⚠️ Ticket Inactivity",
+                description="This ticket will be automatically closed within 24 hours of inactivity.",
+                color=discord.Color.orange()
+            )
+            await message.channel.send(embed=embed)
+
+        elif content == "-game":
+            embed = discord.Embed(
+                title="Here is some in-game information!",
+                description=(
+                    "To join in-game, follow these steps:\n"
+                    "1. Make sure to wait for an SSU.\n"
+                    "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
+                    "3. In the top right of the screen, click the 3 lines.\n"
+                    "4. Go to \"servers.\"\n"
+                    "5. Click \"Join by Code.\"\n"
+                    "6. Put in the code \"vcJJf\"\n"
+                    "7. And have a great time!"
+                ),
+                color=discord.Color.blue()
+            )
+            await message.channel.send(embed=embed)
+
+        elif content == "-apply":
+            embed = discord.Embed(
+                title="📋 Staff Applications",
+                description="To apply for staff, please visit <#1371272557969281166> !",
+                color=discord.Color.green()
+            )
+            await message.channel.send(embed=embed)
+
+        elif content == "-help":
+            embed = discord.Embed(
+                title="❓ Need Assistance?",
+                description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
+                color=discord.Color.blurple()
+            )
+            await message.channel.send(embed=embed)
+
+        await bot.process_commands(message)  # ensure commands still work
+
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+
+    # Add cogs BEFORE syncing commands
+    await bot.add_cog(StaffCommands(bot))
+    await bot.add_cog(PublicCommands(bot))
+    await bot.add_cog(AutoResponder(bot))
+
+    # Register commands in the guild AFTER cogs are added
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
-    # Copy all global commands to this guild
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
 
-    # Add cogs
-    await bot.add_cog(StaffCommands(bot))
-    await bot.add_cog(PublicCommands(bot))
-
-# ====== AUTO-RESPONDER (DELETES MESSAGE) =======
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # Trigger phrases
-    triggers = {
-        "-inactive": discord.Embed(
-            title="⚠️ Ticket Inactivity",
-            description="This ticket will be automatically closed within 24 hours of inactivity.",
-            color=discord.Color.orange()
-        ),
-        "-game": discord.Embed(
-            title="Here is some in-game information!",
-            description=(
-                "To join in-game, follow these steps:\n"
-                "1. Make sure to wait for an SSU.\n"
-                "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
-                "3. In the top right of the screen, click the 3 lines.\n"
-                "4. Go to \"servers.\"\n"
-                "5. Click \"Join by Code.\"\n"
-                "6. Put in the code \"vcJJf\"\n"
-                "7. And have a great time!"
-            ),
-            color=discord.Color.blue()
-        ),
-        "-apply": discord.Embed(
-            title="📋 Staff Applications",
-            description="To apply for staff, please visit <#1371272557969281166> !",
-            color=discord.Color.green()
-        ),
-        "-help": discord.Embed(
-            title="❓ Need Assistance?",
-            description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
-            color=discord.Color.blurple()
-        )
-    }
-
-    content = message.content.strip().lower()
-    if content in triggers:
-        try:
-            await message.delete()
-        except:
-            pass
-        await message.channel.send(embed=triggers[content])
-        return
-
-    await bot.process_commands(message)
+    print("Slash commands synced and ready.")
 
 bot.run(TOKEN)
