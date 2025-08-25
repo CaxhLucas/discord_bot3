@@ -14,13 +14,14 @@ STAFF_ROLES = [BOD_ROLE_ID] + SUPERVISOR_ROLE_IDS
 PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
 SESSION_CHANNEL_ID = 1396277983211163668
-LOGGING_CHANNEL_ID = 1371272557692452884
 SUGGESTION_CHANNEL_ID = 1401761820431355986
 
 SSU_ROLE_ID = 1371272556820041854
 
 SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
+
+OWNER_ID = 1341152829967958114
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -71,7 +72,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
         embed.add_field(name="Expires", value=expires, inline=True)
 
-        # Send to infraction channel
+        # Send to infraction channel if visible
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         if channel:
             try:
@@ -79,7 +80,7 @@ class StaffCommands(commands.Cog):
             except discord.Forbidden:
                 pass
 
-        # Always DM the staff member
+        # DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
@@ -125,21 +126,6 @@ class StaffCommands(commands.Cog):
         await channel.send(message)
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
 
-    @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
-    @app_commands.check(is_bod)
-    @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
-    async def embled(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str, title: str = None, image_url: str = None):
-        embed = discord.Embed(
-            description=description,
-            color=discord.Color.blurple()
-        )
-        if title:
-            embed.title = title
-        if image_url:
-            embed.set_image(url=image_url)
-        await channel.send(embed=embed)
-        await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
-
 # ====== PUBLIC COMMANDS =======
 class PublicCommands(commands.Cog):
     def __init__(self, bot):
@@ -158,55 +144,99 @@ class PublicCommands(commands.Cog):
         author_name = "Anonymous" if anonymous else interaction.user.display_name
         embed.set_footer(text=f"Suggested by {author_name}")
         channel = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
-        msg = await channel.send(embed=embed)
-        await msg.add_reaction("👍")
-        await msg.add_reaction("👎")
-        await msg.create_thread(name=f"Discussion: {title}")
+        await channel.send(embed=embed)
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
-# ====== AUTO-REPLIES =======
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
+# ====== AUTO RESPONDER =======
+class AutoResponder(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
 
-    content = message.content.lower()
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        if message.author.bot:
+            return
+        content = message.content.lower().strip()
 
-    if content.startswith("-inactive"):
-        parts = message.content.split(maxsplit=1)
-        user_text = parts[1] if len(parts) > 1 else None
-        mention_text = user_text if user_text else ""
-        embed = discord.Embed(
-            title="⚠️ Ticket Inactivity",
-            description="This ticket will be automatically closed within 24 hours of inactivity.",
-            color=discord.Color.orange()
-        )
-        await message.channel.send(content=mention_text, embed=embed)
-        await message.delete()
+        if content.startswith("-inactive"):
+            await message.delete()
+            parts = message.content.split(maxsplit=1)
+            mention_text = ""
+            if len(parts) > 1:
+                mention_text = parts[1]
+            embed = discord.Embed(
+                title="⚠️ Ticket Inactivity",
+                description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
+                color=discord.Color.orange()
+            )
+            await message.channel.send(embed=embed)
 
-    elif content.startswith("-game"):
-        await message.channel.send("🎮 Please remember to follow all server rules while playing.")
-        await message.delete()
+        elif content == "-game":
+            await message.delete()
+            embed = discord.Embed(
+                title="Here is some in-game information!",
+                description=(
+                    "To join in-game, follow these steps:\n"
+                    "1. Make sure to wait for an SSU.\n"
+                    "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
+                    "3. In the top right of the screen, click the 3 lines.\n"
+                    "4. Go to \"servers.\"\n"
+                    "5. Click \"Join by Code.\"\n"
+                    "6. Put in the code \"vcJJf\"\n"
+                    "7. And have a great time!"
+                ),
+                color=discord.Color.blue()
+            )
+            await message.channel.send(embed=embed)
 
-    elif content.startswith("-apply"):
-        await message.channel.send("📋 You can apply for staff using the application form in the server.")
-        await message.delete()
+        elif content == "-apply":
+            await message.delete()
+            embed = discord.Embed(
+                title="📋 Staff Applications",
+                description="To apply for staff, please visit <#1371272557969281166> !",
+                color=discord.Color.green()
+            )
+            await message.channel.send(embed=embed)
 
-    elif content.startswith("-help"):
-        await message.channel.send("❓ Need help? Please open a ticket and our staff will assist you shortly.")
-        await message.delete()
+        elif content == "-help":
+            await message.delete()
+            embed = discord.Embed(
+                title="❓ Need Assistance?",
+                description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
+                color=discord.Color.blurple()
+            )
+            await message.channel.send(embed=embed)
 
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
+    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
+    await bot.add_cog(AutoResponder(bot))
 
+    # Sync commands
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
     print("Slash commands synced.")
+
+# ====== AUTO DM + LEAVE FOR NEW SERVERS =======
+@bot.event
+async def on_guild_join(guild):
+    owner = await bot.fetch_user(OWNER_ID)
+    if owner:
+        try:
+            await owner.send(
+                f"⚠️ Your bot was added to a new server!\n"
+                f"Server name: {guild.name}\n"
+                f"Server ID: {guild.id}\n"
+                f"Member count: {guild.member_count}"
+            )
+        except discord.Forbidden:
+            print("Can't DM the owner.")
+    await guild.leave()
 
 bot.run(TOKEN)
