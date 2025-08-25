@@ -247,4 +247,4 @@ async def on_guild_join(guild):
     await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
     await guild.leave()
 
-bot.run(T
+bot.run(TOKEN)
