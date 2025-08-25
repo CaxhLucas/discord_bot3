@@ -15,13 +15,12 @@ PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
 SESSION_CHANNEL_ID = 1396277983211163668
 SUGGESTION_CHANNEL_ID = 1401761820431355986
-
 SSU_ROLE_ID = 1371272556820041854
 
 SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
-OWNER_ID = 1341152829967958114
+OWNER_ID = 1341152829967958114  # For DM when bot joins a new server
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -80,7 +79,7 @@ class StaffCommands(commands.Cog):
             except discord.Forbidden:
                 pass
 
-        # DM the staff member
+        # Always DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
@@ -126,6 +125,21 @@ class StaffCommands(commands.Cog):
         await channel.send(message)
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
 
+    @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
+    @app_commands.check(is_bod)
+    @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
+    async def embled(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str, title: str = None, image_url: str = None):
+        embed = discord.Embed(
+            description=description,
+            color=discord.Color.blurple()
+        )
+        if title:
+            embed.title = title
+        if image_url:
+            embed.set_image(url=image_url)
+        await channel.send(embed=embed)
+        await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
+
 # ====== PUBLIC COMMANDS =======
 class PublicCommands(commands.Cog):
     def __init__(self, bot):
@@ -144,7 +158,10 @@ class PublicCommands(commands.Cog):
         author_name = "Anonymous" if anonymous else interaction.user.display_name
         embed.set_footer(text=f"Suggested by {author_name}")
         channel = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
-        await channel.send(embed=embed)
+        msg = await channel.send(embed=embed)
+        # Add reaction options
+        await msg.add_reaction("👍")
+        await msg.add_reaction("👎")
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
 # ====== AUTO RESPONDER =======
@@ -156,7 +173,8 @@ class AutoResponder(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
-        content = message.content.lower().strip()
+
+        content = message.content.strip().lower()
 
         if content.startswith("-inactive"):
             await message.delete()
@@ -217,26 +235,16 @@ async def on_ready():
     await bot.add_cog(PublicCommands(bot))
     await bot.add_cog(AutoResponder(bot))
 
-    # Sync commands
+    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
     print("Slash commands synced.")
 
-# ====== AUTO DM + LEAVE FOR NEW SERVERS =======
 @bot.event
 async def on_guild_join(guild):
     owner = await bot.fetch_user(OWNER_ID)
-    if owner:
-        try:
-            await owner.send(
-                f"⚠️ Your bot was added to a new server!\n"
-                f"Server name: {guild.name}\n"
-                f"Server ID: {guild.id}\n"
-                f"Member count: {guild.member_count}"
-            )
-        except discord.Forbidden:
-            print("Can't DM the owner.")
+    await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
     await guild.leave()
 
-bot.run(TOKEN)
+bot.run(T
