@@ -102,14 +102,14 @@ class Management(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # --- /say ---
+    # --- /say (BOD only) ---
     @app_commands.command(name="say", description="Make the bot say something.")
     @app_commands.check(is_bod)
     async def say(self, interaction: discord.Interaction, message: str):
         await interaction.channel.send(message)
         await interaction.response.send_message("✅ Sent!", ephemeral=True)
 
-    # --- /embed ---
+    # --- /embed (BOD only, no timestamp) ---
     @app_commands.command(name="embed", description="Create a custom embed.")
     @app_commands.check(is_bod)
     async def embed(
@@ -125,7 +125,7 @@ class Management(commands.Cog):
         await interaction.channel.send(embed=embed)
         await interaction.response.send_message("✅ Embed sent!", ephemeral=True)
 
-    # --- /promote ---
+    # --- /promote (BOD only) ---
     @app_commands.command(name="promote", description="Promote a staff member.")
     @app_commands.check(is_bod)
     async def promote(self, interaction: discord.Interaction, user: discord.Member, new_role: discord.Role):
@@ -138,7 +138,7 @@ class Management(commands.Cog):
         await interaction.channel.send(embed=embed)
         await interaction.response.send_message("✅ Promotion done!", ephemeral=True)
 
-    # --- /infract ---
+    # --- /infract (BOD only, includes DM) ---
     @app_commands.command(name="infract", description="Issue an infraction to a staff member.")
     @app_commands.check(is_bod)
     async def infract(
@@ -151,8 +151,7 @@ class Management(commands.Cog):
     ):
         embed = discord.Embed(
             title="⚠️ Staff Infraction",
-            color=discord.Color.red(),
-            timestamp=discord.utils.utcnow()
+            color=discord.Color.red()
         )
         embed.add_field(name="User", value=user.mention, inline=True)
         embed.add_field(name="Punishment", value=punishment, inline=True)
@@ -179,7 +178,7 @@ class Management(commands.Cog):
             ephemeral=True
         )
 
-    # --- /startup ---
+    # --- /startup (BOD only) ---
     @app_commands.command(name="startup", description="Post server startup banner.")
     @app_commands.check(is_bod)
     async def startup(self, interaction: discord.Interaction):
@@ -188,7 +187,7 @@ class Management(commands.Cog):
         await interaction.channel.send(embed=embed)
         await interaction.response.send_message("✅ Startup banner sent!", ephemeral=True)
 
-    # --- /shutdown ---
+    # --- /shutdown (BOD only) ---
     @app_commands.command(name="shutdown", description="Post server shutdown banner.")
     @app_commands.check(is_bod)
     async def shutdown(self, interaction: discord.Interaction):
@@ -196,6 +195,30 @@ class Management(commands.Cog):
         embed.set_image(url=SHUTDOWN_BANNER)
         await interaction.channel.send(embed=embed)
         await interaction.response.send_message("✅ Shutdown banner sent!", ephemeral=True)
+
+    # --- /suggest (Everyone) ---
+    @app_commands.command(name="suggest", description="Submit a suggestion.")
+    async def suggest(self, interaction: discord.Interaction, suggestion: str):
+        embed = discord.Embed(
+            title="💡 New Suggestion",
+            description=suggestion,
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text=f"Suggested by {interaction.user}")
+        await interaction.channel.send(embed=embed)
+        await interaction.response.send_message("✅ Suggestion sent!", ephemeral=True)
+
+    # --- /report (Everyone) ---
+    @app_commands.command(name="report", description="Report an issue or player.")
+    async def report(self, interaction: discord.Interaction, report: str):
+        embed = discord.Embed(
+            title="🚨 New Report",
+            description=report,
+            color=discord.Color.red()
+        )
+        embed.set_footer(text=f"Reported by {interaction.user}")
+        await interaction.channel.send(embed=embed)
+        await interaction.response.send_message("✅ Report submitted!", ephemeral=True)
 
 
 async def setup(bot):
