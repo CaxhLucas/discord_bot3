@@ -225,6 +225,22 @@ class AutoResponder(commands.Cog):
             )
             await message.channel.send(embed=embed)
 
+        elif content.startswith("-ship"):
+            parts = message.content.split()
+            if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
+                user1 = message.mentions[0]
+                user2 = message.mentions[1]
+                import random
+                percentage = random.randint(0, 100)
+                embed = discord.Embed(
+                    title="💘 Ship Result",
+                    description=f"{user1.mention} and {user2.mention} are **{percentage}%** a match!",
+                    color=discord.Color.pink()
+                )
+                await message.channel.send(embed=embed)
+            else:
+                await message.channel.send("Usage: `-ship @user1 @user2`")
+
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
