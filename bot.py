@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os
 import json
+import random
 
 
 # ====== CONFIG =======
@@ -104,7 +105,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Expires", value=expires, inline=True)
 
 
-        # Send to infraction channel if visible
+        # Send to infractions channel if visible
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         if channel:
             try:
@@ -113,7 +114,7 @@ class StaffCommands(commands.Cog):
                 pass
 
 
-        # Always DM the staff member
+        # DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
@@ -121,13 +122,14 @@ class StaffCommands(commands.Cog):
 
 
         # Save to JSON
-        user_id = str(user.id)
-        infractions.setdefault(user_id, [])
-        infractions[user_id].append({
+        user_id_str = str(user.id)
+        if user_id_str not in infractions:
+            infractions[user_id_str] = []
+        infractions[user_id_str].append({
             "reason": reason,
             "punishment": punishment,
-            "issued_by": interaction.user.id,
-            "expires": expires
+            "expires": expires,
+            "issued_by": interaction.user.id
         })
         save_json(INFRACTIONS_FILE, infractions)
 
@@ -135,23 +137,17 @@ class StaffCommands(commands.Cog):
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
 
 
-    @app_commands.command(name="lookup", description="Look up infractions for a staff member")
+    @app_commands.command(name="lookup", description="Lookup infractions for a staff member")
+    @app_commands.check(is_staff)
     @app_commands.describe(user="Staff member to lookup")
     async def lookup(self, interaction: discord.Interaction, user: discord.Member):
-        user_id = str(user.id)
-        if user_id not in infractions or not infractions[user_id]:
+        user_id_str = str(user.id)
+        user_infractions = infractions.get(user_id_str, [])
+        if not user_infractions:
             await interaction.response.send_message(f"No infractions found for {user.display_name}.", ephemeral=True)
             return
-        embed = discord.Embed(title=f"Infractions for {user.display_name}", color=discord.Color.orange())
-        for i, entry in enumerate(infractions[user_id], start=1):
-            issuer = bot.get_user(entry["issued_by"])
-            issuer_name = issuer.display_name if issuer else "Unknown"
-            embed.add_field(
-                name=f"#{i} - {entry['punishment']}",
-                value=f"Reason: {entry['reason']}\nIssued by: {issuer_name}\nExpires: {entry['expires']}",
-                inline=False
-            )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        text = "\n".join([f"- {i['punishment']}: {i['reason']} (Expires: {i['expires']})" for i in user_infractions])
+        await interaction.response.send_message(f"Infractions for {user.display_name}:\n{text}", ephemeral=True)
 
 
     @app_commands.command(name="serverstart", description="Start a session")
@@ -254,9 +250,7 @@ class AutoResponder(commands.Cog):
         if content.startswith("-inactive"):
             await message.delete()
             parts = message.content.split(maxsplit=1)
-            mention_text = ""
-            if len(parts) > 1:
-                mention_text = parts[1]
+            mention_text = parts[1] if len(parts) > 1 else ""
             embed = discord.Embed(
                 title="⚠️ Ticket Inactivity",
                 description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
@@ -309,7 +303,6 @@ class AutoResponder(commands.Cog):
             if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
                 user1 = message.mentions[0]
                 user2 = message.mentions[1]
-                import random
                 percentage = random.randint(0, 100)
                 embed = discord.Embed(
                     title="💘 Ship Result",
@@ -327,13 +320,11 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
 
-    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
     await bot.add_cog(AutoResponder(bot))
 
 
-    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
