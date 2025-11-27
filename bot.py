@@ -1,12 +1,13 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import json
-import asyncio
+import datetime
+import random
 
 
-# ===== CONFIG =====
+# ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
 MAIN_GUILD_ID = 1371272556820041849
 
@@ -23,13 +24,16 @@ SUGGESTION_CHANNEL_ID = 1401761820431355986
 SSU_ROLE_ID = 1371272556820041854
 
 
+SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
+SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
+
+
 OWNER_ID = 1341152829967958114
 
 
-JSON_TEST_FILE = "test.json"
+INFRACTIONS_JSON = "infractions.json"
 
 
-# ===== INTENTS =====
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -39,15 +43,7 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ===== HELPERS =====
-def is_staff(interaction: discord.Interaction) -> bool:
-    return any(role.id in STAFF_ROLES for role in interaction.user.roles)
-
-
-def is_bod(interaction: discord.Interaction) -> bool:
-    return BOD_ROLE_ID in [role.id for role in interaction.user.roles]
-
-
+# ====== JSON HELPERS =======
 def load_json(filename):
     if not os.path.exists(filename):
         return {}
@@ -60,7 +56,19 @@ def save_json(filename, data):
         json.dump(data, f, indent=2)
 
 
-# ===== STAFF COMMANDS =====
+infractions = load_json(INFRACTIONS_JSON)
+
+
+# ====== PERMISSION CHECKS =======
+def is_staff(interaction: discord.Interaction) -> bool:
+    return any(role.id in STAFF_ROLES for role in interaction.user.roles)
+
+
+def is_bod(interaction: discord.Interaction) -> bool:
+    return BOD_ROLE_ID in [role.id for role in interaction.user.roles]
+
+
+# ====== STAFF COMMANDS =======
 class StaffCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -98,7 +106,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Expires", value=expires, inline=True)
 
 
-        # Send to infraction channel if visible
+        # Send to infraction channel
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         if channel:
             try:
@@ -107,14 +115,37 @@ class StaffCommands(commands.Cog):
                 pass
 
 
-        # Always DM the staff member
+        # DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
             pass
 
 
+        # Save to JSON
+        infractions.setdefault(str(user.id), []).append({
+            "reason": reason,
+            "punishment": punishment,
+            "issued_by": str(interaction.user.id),
+            "expires": expires,
+            "time": int(datetime.datetime.utcnow().timestamp())
+        })
+        save_json(INFRACTIONS_JSON, infractions)
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
+
+
+    @app_commands.command(name="infractions_lookup", description="Lookup infractions for a user")
+    @app_commands.check(is_staff)
+    @app_commands.describe(user="Staff member")
+    async def infractions_lookup(self, interaction: discord.Interaction, user: discord.Member):
+        user_infractions = infractions.get(str(user.id), [])
+        if not user_infractions:
+            await interaction.response.send_message(f"No infractions found for {user.display_name}.", ephemeral=True)
+            return
+        text = ""
+        for idx, inf in enumerate(user_infractions, 1):
+            text += f"**{idx}. Punishment:** {inf['punishment']} | **Reason:** {inf['reason']} | **Issued By:** <@{inf['issued_by']}> | **Expires:** {inf['expires']}\n"
+        await interaction.response.send_message(f"Infractions for {user.display_name}:\n{text}", ephemeral=True)
 
 
     @app_commands.command(name="serverstart", description="Start a session")
@@ -122,10 +153,15 @@ class StaffCommands(commands.Cog):
     async def serverstart(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="✅ Session Started",
-            description="The Staff Team has started a session!\n**Server Name:** Iowa State Roleplay\n**In-game Code:** vcJJf",
+            description=(
+                "The Staff Team has started a session!\n"
+                "Please remember to read all in-game rules before joining.\n\n"
+                "**Server Name:** Iowa State Roleplay\n"
+                "**In-game Code:** vcJJf"
+            ),
             color=discord.Color.green()
         )
-        embed.set_image(url="https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png")
+        embed.set_image(url=SERVER_START_BANNER)
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
         await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
         await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
@@ -139,13 +175,37 @@ class StaffCommands(commands.Cog):
             description="The server is currently shut down.\nPlease do not join in-game unless instructed by SHR+.",
             color=discord.Color.red()
         )
-        embed.set_image(url="https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png")
+        embed.set_image(url=SERVER_SHUTDOWN_BANNER)
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Session ended.", ephemeral=True)
 
 
-# ===== PUBLIC COMMANDS =====
+    @app_commands.command(name="say", description="Send a message as the bot")
+    @app_commands.check(is_bod)
+    @app_commands.describe(channel="Channel", message="Message content")
+    async def say(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+        await channel.send(message)
+        await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
+
+
+    @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
+    @app_commands.check(is_bod)
+    @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
+    async def embled(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str, title: str = None, image_url: str = None):
+        embed = discord.Embed(
+            description=description,
+            color=discord.Color.blurple()
+        )
+        if title:
+            embed.title = title
+        if image_url:
+            embed.set_image(url=image_url)
+        await channel.send(embed=embed)
+        await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
+
+
+# ====== PUBLIC COMMANDS =======
 class PublicCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -170,7 +230,7 @@ class PublicCommands(commands.Cog):
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
 
-# ===== AUTO RESPONDER =====
+# ====== AUTO RESPONDER =======
 class AutoResponder(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -180,15 +240,15 @@ class AutoResponder(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
-
-
         content = message.content.strip().lower()
 
 
         if content.startswith("-inactive"):
             await message.delete()
             parts = message.content.split(maxsplit=1)
-            mention_text = parts[1] if len(parts) > 1 else ""
+            mention_text = ""
+            if len(parts) > 1:
+                mention_text = parts[1]
             embed = discord.Embed(
                 title="⚠️ Ticket Inactivity",
                 description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
@@ -201,7 +261,16 @@ class AutoResponder(commands.Cog):
             await message.delete()
             embed = discord.Embed(
                 title="Here is some in-game information!",
-                description="Steps to join in-game:\n1. Wait for an SSU.\n2. Open Roblox → Emergency Response: Liberty County.\n3. Click 3 lines → Servers → Join by Code → vcJJf",
+                description=(
+                    "To join in-game, follow these steps:\n"
+                    "1. Make sure to wait for an SSU.\n"
+                    "2. Once an SSU has been concurred, open Roblox, search and open Emergency Response: Liberty County.\n"
+                    "3. In the top right of the screen, click the 3 lines.\n"
+                    "4. Go to \"servers.\"\n"
+                    "5. Click \"Join by Code.\"\n"
+                    "6. Put in the code \"vcJJf\"\n"
+                    "7. And have a great time!"
+                ),
                 color=discord.Color.blue()
             )
             await message.channel.send(embed=embed)
@@ -221,54 +290,46 @@ class AutoResponder(commands.Cog):
             await message.delete()
             embed = discord.Embed(
                 title="❓ Need Assistance?",
-                description="If you need help, please open a ticket in <#1371272558221066261>.",
+                description="If you're in need of assistance, please open a ticket in <#1371272558221066261>.",
                 color=discord.Color.blurple()
             )
             await message.channel.send(embed=embed)
 
 
-# ===== JSON TEST COMMANDS =====
-class JsonTestCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+        elif content.startswith("-ship"):
+            parts = message.content.split()
+            if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
+                user1 = message.mentions[0]
+                user2 = message.mentions[1]
+                percentage = random.randint(0, 100)
+                embed = discord.Embed(
+                    title="💘 Ship Result",
+                    description=f"{user1.mention} and {user2.mention} are **{percentage}%** a match!",
+                    color=discord.Color.pink()
+                )
+                await message.channel.send(embed=embed)
+            else:
+                await message.channel.send("Usage: `-ship @user1 @user2`")
 
 
-    @app_commands.command(name="testjson_add", description="Add a key/value to JSON")
-    @app_commands.describe(value="Value to add")
-    async def testjson_add(self, interaction: discord.Interaction, value: str):
-        data = load_json(JSON_TEST_FILE)
-        data["last_value"] = value
-        save_json(JSON_TEST_FILE, data)
-        await interaction.response.send_message(f"Value saved to JSON: {value}", ephemeral=True)
-
-
-    @app_commands.command(name="testjson_read", description="Read value from JSON")
-    async def testjson_read(self, interaction: discord.Interaction):
-        data = load_json(JSON_TEST_FILE)
-        value = data.get("last_value", "Nothing found")
-        await interaction.response.send_message(f"JSON value: {value}", ephemeral=True)
-
-
-# ===== BOT EVENTS =====
+# ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
 
-    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
     await bot.add_cog(AutoResponder(bot))
-    await bot.add_cog(JsonTestCog(bot))
 
 
-    # Sync commands in guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
     print("Slash commands synced.")
 
 
+# DM owner and leave if added to a new server
 @bot.event
 async def on_guild_join(guild):
     owner = await bot.fetch_user(OWNER_ID)
@@ -276,5 +337,4 @@ async def on_guild_join(guild):
     await guild.leave()
 
 
-# ===== RUN BOT =====
 bot.run(TOKEN)
