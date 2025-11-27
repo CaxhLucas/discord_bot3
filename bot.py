@@ -24,7 +24,7 @@ SESSION_CHANNEL_ID = 1396277983211163668
 SUGGESTION_CHANNEL_ID = 1401761820431355986
 LOGGING_CHANNEL_ID = 1371272557692452884
 BOD_ALERT_CHANNEL_ID = 1443716401176248492
-PARTNERSHIP_CHANNEL_ID = 1421873146834718740
+PARTNERSHIP_CHANNEL_ID = 123456789012345678  # replace with your actual channel
 SSU_ROLE_ID = 1371272556820041854
 
 
@@ -122,6 +122,7 @@ class StaffCommands(commands.Cog):
             pass
 
 
+        # Save to infractions.json
         infractions = load_infractions()
         user_id_str = str(user.id)
         if user_id_str not in infractions:
@@ -241,7 +242,7 @@ class PublicCommands(commands.Cog):
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
 
-# ====== AUTO RESPONDER & COMMAND LOGGER =======
+# ====== AUTO RESPONDER =======
 class AutoResponder(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -251,16 +252,16 @@ class AutoResponder(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
+        content = message.content.strip().lower()
 
 
-        content_lower = message.content.strip().lower()
-
-
-        # ----- AUTO RESPONSES -----
-        if content_lower.startswith("-inactive"):
+        # Command auto-responses
+        if content.startswith("-inactive"):
             await message.delete()
             parts = message.content.split(maxsplit=1)
-            mention_text = parts[1] if len(parts) > 1 else ""
+            mention_text = ""
+            if len(parts) > 1:
+                mention_text = parts[1]
             embed = discord.Embed(
                 title="⚠️ Ticket Inactivity",
                 description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
@@ -269,7 +270,7 @@ class AutoResponder(commands.Cog):
             await message.channel.send(embed=embed)
 
 
-        elif content_lower == "-game":
+        elif content == "-game":
             await message.delete()
             embed = discord.Embed(
                 title="Here is some in-game information!",
@@ -288,7 +289,7 @@ class AutoResponder(commands.Cog):
             await message.channel.send(embed=embed)
 
 
-        elif content_lower == "-apply":
+        elif content == "-apply":
             await message.delete()
             embed = discord.Embed(
                 title="📋 Staff Applications",
@@ -298,7 +299,7 @@ class AutoResponder(commands.Cog):
             await message.channel.send(embed=embed)
 
 
-        elif content_lower == "-help":
+        elif content == "-help":
             await message.delete()
             embed = discord.Embed(
                 title="❓ Need Assistance?",
@@ -308,7 +309,7 @@ class AutoResponder(commands.Cog):
             await message.channel.send(embed=embed)
 
 
-        elif content_lower.startswith("-ship"):
+        elif content.startswith("-ship"):
             parts = message.content.split()
             if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
                 user1 = message.mentions[0]
@@ -324,14 +325,14 @@ class AutoResponder(commands.Cog):
                 await message.channel.send("Usage: `-ship @user1 @user2`")
 
 
-        # ----- PARTNERSHIP RELAY -----
-        if message.reference and "-partnership" in content_lower:
-            ref_msg = await message.channel.fetch_message(message.reference.message_id)
-            channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
-            await channel.send(f"{ref_msg.author.mention} sent a partnership request.\nRepresentative: {message.author.mention}\nMessage: {ref_msg.content}")
+        # Partnership replies
+        if message.reference and "-partnership" in content:
+            replied_msg = await message.channel.fetch_message(message.reference.message_id)
+            partner_channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
+            await partner_channel.send(f"{replied_msg.author.mention} requested a partnership. Representative: {message.author.mention}\nContent: {replied_msg.content}")
 
 
-        # ----- LOG COMMANDS -----
+        # Log commands
         if message.content.startswith("/"):
             ch = bot.get_channel(LOGGING_CHANNEL_ID)
             await ch.send(f"{message.author.mention} used command: {message.content}")
@@ -340,13 +341,11 @@ class AutoResponder(commands.Cog):
         await bot.process_commands(message)
 
 
-# ====== SERVER WARNINGS & MODERATION LOGS =======
+# ====== SERVER WARNINGS =======
 JOIN_THRESHOLD = 3
 JOIN_INTERVAL = 60  # seconds
 NEW_ACCOUNT_DAYS = 30
 INACTIVE_DAYS = 14
-
-
 recent_joins = []
 
 
@@ -378,10 +377,6 @@ async def on_member_join(member):
             color=discord.Color.red()
         )
         await channel.send(embed=embed)
-
-
-    # Clean old joins
-    recent_joins[:] = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
 
 
 @bot.event
@@ -428,7 +423,7 @@ async def on_guild_channel_update(before, after):
     await ch.send(embed=embed)
 
 
-# Background task to check inactive staff
+# Background task: check inactive staff
 @tasks.loop(hours=24)
 async def check_inactive_staff():
     await bot.wait_until_ready()
@@ -439,15 +434,12 @@ async def check_inactive_staff():
         if any(role.id in STAFF_ROLES for role in member.roles) and not member.bot:
             last_message_time = None
             for text_channel in guild.text_channels:
-                try:
-                    async for msg in text_channel.history(limit=1000):
-                        if msg.author.id == member.id:
-                            last_message_time = msg.created_at
-                            break
-                    if last_message_time:
+                async for msg in text_channel.history(limit=10000):
+                    if msg.author.id == member.id:
+                        last_message_time = msg.created_at
                         break
-                except discord.Forbidden:
-                    continue
+                if last_message_time:
+                    break
             if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
                 embed = discord.Embed(
                     title="⚠️ Inactive Staff Member",
@@ -455,9 +447,6 @@ async def check_inactive_staff():
                     color=discord.Color.orange()
                 )
                 await channel.send(embed=embed)
-
-
-check_inactive_staff.start()
 
 
 # ====== BOT EVENTS =======
@@ -473,6 +462,10 @@ async def on_ready():
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
     print("Slash commands synced.")
+
+
+    # Start background tasks safely
+    check_inactive_staff.start()
 
 
 @bot.event
