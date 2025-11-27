@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
+import json
 
 
 # ====== CONFIG =======
@@ -28,6 +29,9 @@ SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705
 OWNER_ID = 1341152829967958114  # For DM when bot joins a new server
 
 
+INFRACTIONS_FILE = "infractions.json"
+
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -35,6 +39,22 @@ intents.guilds = True
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ====== JSON HELPERS =======
+def load_json(file):
+    if not os.path.exists(file):
+        return {}
+    with open(file, "r") as f:
+        return json.load(f)
+
+
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+infractions = load_json(INFRACTIONS_FILE)
 
 
 # ====== PERMISSION CHECKS =======
@@ -100,7 +120,38 @@ class StaffCommands(commands.Cog):
             pass
 
 
+        # Save to JSON
+        user_id = str(user.id)
+        infractions.setdefault(user_id, [])
+        infractions[user_id].append({
+            "reason": reason,
+            "punishment": punishment,
+            "issued_by": interaction.user.id,
+            "expires": expires
+        })
+        save_json(INFRACTIONS_FILE, infractions)
+
+
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
+
+
+    @app_commands.command(name="lookup", description="Look up infractions for a staff member")
+    @app_commands.describe(user="Staff member to lookup")
+    async def lookup(self, interaction: discord.Interaction, user: discord.Member):
+        user_id = str(user.id)
+        if user_id not in infractions or not infractions[user_id]:
+            await interaction.response.send_message(f"No infractions found for {user.display_name}.", ephemeral=True)
+            return
+        embed = discord.Embed(title=f"Infractions for {user.display_name}", color=discord.Color.orange())
+        for i, entry in enumerate(infractions[user_id], start=1):
+            issuer = bot.get_user(entry["issued_by"])
+            issuer_name = issuer.display_name if issuer else "Unknown"
+            embed.add_field(
+                name=f"#{i} - {entry['punishment']}",
+                value=f"Reason: {entry['reason']}\nIssued by: {issuer_name}\nExpires: {entry['expires']}",
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
     @app_commands.command(name="serverstart", description="Start a session")
