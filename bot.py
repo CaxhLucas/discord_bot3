@@ -1,8 +1,11 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import json
+import asyncio
+from datetime import datetime, timedelta
+import random
 
 
 # ====== CONFIG =======
@@ -19,7 +22,8 @@ PROMOTION_CHANNEL_ID = 1400683757786365972
 INFRACTION_CHANNEL_ID = 1400683360623267870
 SESSION_CHANNEL_ID = 1396277983211163668
 SUGGESTION_CHANNEL_ID = 1401761820431355986
-MOD_LOG_CHANNEL_ID = 1371272557692452884
+LOGGING_CHANNEL_ID = 1371272557692452884
+BOD_ALERT_CHANNEL_ID = 1443716401176248492
 SSU_ROLE_ID = 1371272556820041854
 
 
@@ -27,10 +31,10 @@ SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
 
-OWNER_ID = 1341152829967958114  # For DM when bot joins a new server
+OWNER_ID = 1341152829967958114
 
 
-INFRACTION_JSON_FILE = "infractions.json"
+INFRACTIONS_FILE = "infractions.json"
 
 
 intents = discord.Intents.default()
@@ -53,28 +57,16 @@ def is_bod(interaction: discord.Interaction) -> bool:
 
 # ====== HELPER FUNCTIONS =======
 def load_infractions():
-    try:
-        with open(INFRACTION_JSON_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    if not os.path.exists(INFRACTIONS_FILE):
+        with open(INFRACTIONS_FILE, "w") as f:
+            json.dump({}, f)
+    with open(INFRACTIONS_FILE, "r") as f:
+        return json.load(f)
 
 
 def save_infractions(data):
-    with open(INFRACTION_JSON_FILE, "w") as f:
+    with open(INFRACTIONS_FILE, "w") as f:
         json.dump(data, f, indent=4)
-
-
-def log_command(user, command_name, options=None):
-    channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
-    if channel:
-        embed = discord.Embed(title="📝 Command Executed", color=discord.Color.gold())
-        embed.add_field(name="User", value=user.mention, inline=True)
-        embed.add_field(name="Command", value=command_name, inline=True)
-        if options:
-            opts = "\n".join([f"{k}: {v}" for k, v in options.items()])
-            embed.add_field(name="Options", value=opts, inline=False)
-        bot.loop.create_task(channel.send(embed=embed))
 
 
 # ====== STAFF COMMANDS =======
@@ -87,7 +79,10 @@ class StaffCommands(commands.Cog):
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member to promote", new_rank="New rank", reason="Reason for promotion")
     async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
-        embed = discord.Embed(title="📈 Staff Promotion", color=discord.Color.green())
+        embed = discord.Embed(
+            title="📈 Staff Promotion",
+            color=discord.Color.green()
+        )
         embed.add_field(name="User", value=user.mention, inline=True)
         embed.add_field(name="New Rank", value=new_rank, inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
@@ -95,14 +90,16 @@ class StaffCommands(commands.Cog):
         channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
         await channel.send(content=user.mention, embed=embed)
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
-        log_command(interaction.user, "promote", {"user": user.name, "new_rank": new_rank, "reason": reason})
 
 
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
     async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
-        embed = discord.Embed(title="⚠️ Staff Infraction", color=discord.Color.red())
+        embed = discord.Embed(
+            title="⚠️ Staff Infraction",
+            color=discord.Color.red()
+        )
         embed.add_field(name="User", value=user.mention, inline=True)
         embed.add_field(name="Punishment", value=punishment, inline=True)
         embed.add_field(name="Reason", value=reason, inline=False)
@@ -110,7 +107,6 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Expires", value=expires, inline=True)
 
 
-        # Send to infraction channel if visible
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         if channel:
             try:
@@ -119,7 +115,6 @@ class StaffCommands(commands.Cog):
                 pass
 
 
-        # Always DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
@@ -127,16 +122,41 @@ class StaffCommands(commands.Cog):
 
 
         # Save to infractions.json
-        data = load_infractions()
-        user_id = str(user.id)
-        if user_id not in data:
-            data[user_id] = []
-        data[user_id].append({"reason": reason, "punishment": punishment, "issued_by": str(interaction.user.id), "expires": expires})
-        save_infractions(data)
-
-
+        infractions = load_infractions()
+        user_id_str = str(user.id)
+        if user_id_str not in infractions:
+            infractions[user_id_str] = []
+        infractions[user_id_str].append({
+            "reason": reason,
+            "punishment": punishment,
+            "issued_by": interaction.user.id,
+            "expires": expires,
+            "timestamp": str(datetime.utcnow())
+        })
+        save_infractions(infractions)
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
-        log_command(interaction.user, "infract", {"user": user.name, "reason": reason, "punishment": punishment, "expires": expires})
+
+
+    @app_commands.command(name="infractions", description="Lookup infractions of a staff member")
+    @app_commands.check(is_staff)
+    @app_commands.describe(user="Staff member to lookup")
+    async def infractions(self, interaction: discord.Interaction, user: discord.Member):
+        infractions = load_infractions()
+        user_id_str = str(user.id)
+        if user_id_str not in infractions or len(infractions[user_id_str]) == 0:
+            await interaction.response.send_message(f"No infractions found for {user.display_name}.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title=f"Infractions for {user.display_name}",
+            color=discord.Color.orange()
+        )
+        for idx, inf in enumerate(infractions[user_id_str], 1):
+            embed.add_field(
+                name=f"{idx}. {inf['punishment']}",
+                value=f"Reason: {inf['reason']} | Issued by <@{inf['issued_by']}> | Expires: {inf['expires']}",
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
     @app_commands.command(name="serverstart", description="Start a session")
@@ -156,7 +176,6 @@ class StaffCommands(commands.Cog):
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
         await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
         await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
-        log_command(interaction.user, "serverstart")
 
 
     @app_commands.command(name="serverstop", description="End a session")
@@ -171,7 +190,6 @@ class StaffCommands(commands.Cog):
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
         await channel.send(embed=embed)
         await interaction.response.send_message("Session ended.", ephemeral=True)
-        log_command(interaction.user, "serverstop")
 
 
     @app_commands.command(name="say", description="Send a message as the bot")
@@ -180,21 +198,22 @@ class StaffCommands(commands.Cog):
     async def say(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
         await channel.send(message)
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
-        log_command(interaction.user, "say", {"channel": channel.name, "message": message})
 
 
     @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
     async def embled(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str, title: str = None, image_url: str = None):
-        embed = discord.Embed(description=description, color=discord.Color.blurple())
+        embed = discord.Embed(
+            description=description,
+            color=discord.Color.blurple()
+        )
         if title:
             embed.title = title
         if image_url:
             embed.set_image(url=image_url)
         await channel.send(embed=embed)
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
-        log_command(interaction.user, "embled", {"channel": channel.name, "title": title, "description": description})
 
 
 # ====== PUBLIC COMMANDS =======
@@ -206,18 +225,20 @@ class PublicCommands(commands.Cog):
     @app_commands.command(name="suggest", description="Submit a suggestion")
     @app_commands.describe(title="Suggestion title", description="Suggestion details", image_url="Optional image", anonymous="Remain anonymous?")
     async def suggest(self, interaction: discord.Interaction, title: str, description: str, image_url: str = None, anonymous: bool = False):
-        embed = discord.Embed(title=title, description=description, color=discord.Color.green())
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.green()
+        )
         if image_url:
             embed.set_image(url=image_url)
         author_name = "Anonymous" if anonymous else interaction.user.display_name
         embed.set_footer(text=f"Suggested by {author_name}")
         channel = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
         msg = await channel.send(embed=embed)
-        # Add reaction options
         await msg.add_reaction("👍")
         await msg.add_reaction("👎")
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
-        log_command(interaction.user, "suggest", {"title": title, "description": description, "anonymous": anonymous})
 
 
 # ====== AUTO RESPONDER =======
@@ -235,18 +256,18 @@ class AutoResponder(commands.Cog):
         content = message.content.strip().lower()
 
 
-        # ===== Auto Replies =====
         if content.startswith("-inactive"):
             await message.delete()
             parts = message.content.split(maxsplit=1)
-            mention_text = parts[1] if len(parts) > 1 else ""
+            mention_text = ""
+            if len(parts) > 1:
+                mention_text = parts[1]
             embed = discord.Embed(
                 title="⚠️ Ticket Inactivity",
                 description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
                 color=discord.Color.orange()
             )
             await message.channel.send(embed=embed)
-            log_command(message.author, "-inactive", {"mention_text": mention_text})
 
 
         elif content == "-game":
@@ -266,7 +287,6 @@ class AutoResponder(commands.Cog):
                 color=discord.Color.blue()
             )
             await message.channel.send(embed=embed)
-            log_command(message.author, "-game")
 
 
         elif content == "-apply":
@@ -277,7 +297,6 @@ class AutoResponder(commands.Cog):
                 color=discord.Color.green()
             )
             await message.channel.send(embed=embed)
-            log_command(message.author, "-apply")
 
 
         elif content == "-help":
@@ -288,7 +307,6 @@ class AutoResponder(commands.Cog):
                 color=discord.Color.blurple()
             )
             await message.channel.send(embed=embed)
-            log_command(message.author, "-help")
 
 
         elif content.startswith("-ship"):
@@ -296,7 +314,6 @@ class AutoResponder(commands.Cog):
             if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
                 user1 = message.mentions[0]
                 user2 = message.mentions[1]
-                import random
                 percentage = random.randint(0, 100)
                 embed = discord.Embed(
                     title="💘 Ship Result",
@@ -304,24 +321,142 @@ class AutoResponder(commands.Cog):
                     color=discord.Color.pink()
                 )
                 await message.channel.send(embed=embed)
-                log_command(message.author, "-ship", {"user1": user1.name, "user2": user2.name, "percentage": percentage})
             else:
                 await message.channel.send("Usage: `-ship @user1 @user2`")
+
+
+# ====== SERVER WARNINGS & MODERATION LOGS =======
+JOIN_THRESHOLD = 3
+JOIN_INTERVAL = 60  # seconds
+NEW_ACCOUNT_DAYS = 30
+INACTIVE_DAYS = 14
+
+
+recent_joins = []
+
+
+@bot.event
+async def on_member_join(member):
+    now = datetime.utcnow()
+    recent_joins.append((member.id, now))
+
+
+    # New account detection
+    account_age_days = (now - member.created_at).days
+    if account_age_days < NEW_ACCOUNT_DAYS:
+        channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        embed = discord.Embed(
+            title="⚠️ New Account Joined",
+            description=f"{member.mention} joined. Account is {account_age_days} days old.",
+            color=discord.Color.orange()
+        )
+        await channel.send(embed=embed)
+
+
+    # Potential raid detection
+    recent_joins_filtered = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
+    if len(recent_joins_filtered) >= JOIN_THRESHOLD:
+        channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        embed = discord.Embed(
+            title="⚠️ Potential Raid Detected",
+            description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
+            color=discord.Color.red()
+        )
+        await channel.send(embed=embed)
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+    embed = discord.Embed(
+        title="⚠️ Channel Created",
+        description=f"Channel {channel.mention} was created.",
+        color=discord.Color.orange()
+    )
+    await ch.send(embed=embed)
+
+
+@bot.event
+async def on_guild_role_create(role):
+    ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+    embed = discord.Embed(
+        title="⚠️ Role Created",
+        description=f"Role {role.name} was created.",
+        color=discord.Color.orange()
+    )
+    await ch.send(embed=embed)
+
+
+@bot.event
+async def on_guild_role_update(before, after):
+    ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+    embed = discord.Embed(
+        title="⚠️ Role Updated",
+        description=f"Role {before.name} was updated.",
+        color=discord.Color.orange()
+    )
+    await ch.send(embed=embed)
+
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+    embed = discord.Embed(
+        title="⚠️ Channel Updated",
+        description=f"Channel {before.name} was updated.",
+        color=discord.Color.orange()
+    )
+    await ch.send(embed=embed)
+
+
+@bot.event
+async def on_message(message):
+    # Log commands
+    if message.content.startswith("/"):
+        ch = bot.get_channel(LOGGING_CHANNEL_ID)
+        await ch.send(f"{message.author.mention} used command: {message.content}")
+    await bot.process_commands(message)
+
+
+# Background task to check inactive staff
+@tasks.loop(hours=24)
+async def check_inactive_staff():
+    await bot.wait_until_ready()
+    guild = bot.get_guild(MAIN_GUILD_ID)
+    channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+    now = datetime.utcnow()
+    for member in guild.members:
+        if any(role.id in STAFF_ROLES for role in member.roles) and not member.bot:
+            # fetch last message from all text channels
+            last_message_time = None
+            for text_channel in guild.text_channels:
+                async for msg in text_channel.history(limit=10000):
+                    if msg.author.id == member.id:
+                        last_message_time = msg.created_at
+                        break
+                if last_message_time:
+                    break
+            if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
+                embed = discord.Embed(
+                    title="⚠️ Inactive Staff Member",
+                    description=f"{member.mention} has not sent a message in {INACTIVE_DAYS} days.",
+                    color=discord.Color.orange()
+                )
+                await channel.send(embed=embed)
+
+
+check_inactive_staff.start()
 
 
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-
-
-    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
     await bot.add_cog(AutoResponder(bot))
 
 
-    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
@@ -333,14 +468,6 @@ async def on_guild_join(guild):
     owner = await bot.fetch_user(OWNER_ID)
     await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
     await guild.leave()
-
-
-# ====== LOG SLASH COMMANDS =======
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    if interaction.type == discord.InteractionType.application_command:
-        options = {o.name: o.value for o in interaction.options} if interaction.options else None
-        log_command(interaction.user, interaction.command.name, options)
 
 
 bot.run(TOKEN)
