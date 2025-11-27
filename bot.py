@@ -1,10 +1,7 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 import os
-import json
-import datetime
-import random
 
 
 # ====== CONFIG =======
@@ -28,10 +25,7 @@ SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
 
-OWNER_ID = 1341152829967958114
-
-
-INFRACTIONS_JSON = "infractions.json"
+OWNER_ID = 1341152829967958114  # For DM when bot joins a new server
 
 
 intents = discord.Intents.default()
@@ -41,22 +35,6 @@ intents.guilds = True
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-# ====== JSON HELPERS =======
-def load_json(filename):
-    if not os.path.exists(filename):
-        return {}
-    with open(filename, "r") as f:
-        return json.load(f)
-
-
-def save_json(filename, data):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-infractions = load_json(INFRACTIONS_JSON)
 
 
 # ====== PERMISSION CHECKS =======
@@ -106,7 +84,7 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Expires", value=expires, inline=True)
 
 
-        # Send to infraction channel
+        # Send to infraction channel if visible
         channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
         if channel:
             try:
@@ -115,37 +93,14 @@ class StaffCommands(commands.Cog):
                 pass
 
 
-        # DM the staff member
+        # Always DM the staff member
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
             pass
 
 
-        # Save to JSON
-        infractions.setdefault(str(user.id), []).append({
-            "reason": reason,
-            "punishment": punishment,
-            "issued_by": str(interaction.user.id),
-            "expires": expires,
-            "time": int(datetime.datetime.utcnow().timestamp())
-        })
-        save_json(INFRACTIONS_JSON, infractions)
         await interaction.response.send_message(f"Infraction logged and {user.display_name} has been notified.", ephemeral=True)
-
-
-    @app_commands.command(name="infractions_lookup", description="Lookup infractions for a user")
-    @app_commands.check(is_staff)
-    @app_commands.describe(user="Staff member")
-    async def infractions_lookup(self, interaction: discord.Interaction, user: discord.Member):
-        user_infractions = infractions.get(str(user.id), [])
-        if not user_infractions:
-            await interaction.response.send_message(f"No infractions found for {user.display_name}.", ephemeral=True)
-            return
-        text = ""
-        for idx, inf in enumerate(user_infractions, 1):
-            text += f"**{idx}. Punishment:** {inf['punishment']} | **Reason:** {inf['reason']} | **Issued By:** <@{inf['issued_by']}> | **Expires:** {inf['expires']}\n"
-        await interaction.response.send_message(f"Infractions for {user.display_name}:\n{text}", ephemeral=True)
 
 
     @app_commands.command(name="serverstart", description="Start a session")
@@ -240,6 +195,8 @@ class AutoResponder(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
+
+
         content = message.content.strip().lower()
 
 
@@ -301,6 +258,7 @@ class AutoResponder(commands.Cog):
             if len(parts) >= 3 and message.mentions and len(message.mentions) >= 2:
                 user1 = message.mentions[0]
                 user2 = message.mentions[1]
+                import random
                 percentage = random.randint(0, 100)
                 embed = discord.Embed(
                     title="💘 Ship Result",
@@ -318,18 +276,19 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
 
+    # Add cogs
     await bot.add_cog(StaffCommands(bot))
     await bot.add_cog(PublicCommands(bot))
     await bot.add_cog(AutoResponder(bot))
 
 
+    # Register commands in the guild
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
     bot.tree.copy_global_to(guild=guild_obj)
     await bot.tree.sync(guild=guild_obj)
     print("Slash commands synced.")
 
 
-# DM owner and leave if added to a new server
 @bot.event
 async def on_guild_join(guild):
     owner = await bot.fetch_user(OWNER_ID)
