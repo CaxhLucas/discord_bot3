@@ -5,6 +5,7 @@ import os
 import asyncio
 from datetime import datetime, timedelta, timezone
 import random
+import logging
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -31,6 +32,10 @@ SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
 OWNER_ID = 1341152829967958114
+
+# ====== Logging setup =======
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("discord_bot")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -64,7 +69,11 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Reason", value=reason, inline=False)
         embed.add_field(name="Promoted By", value=interaction.user.mention, inline=True)
         channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
-        await channel.send(content=user.mention, embed=embed)
+        if channel:
+            try:
+                await channel.send(content=user.mention, embed=embed)
+            except Exception:
+                pass
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
@@ -88,10 +97,14 @@ class StaffCommands(commands.Cog):
                 await channel.send(content=user.mention, embed=embed)
             except discord.Forbidden:
                 pass
+            except Exception:
+                pass
 
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
+            pass
+        except Exception:
             pass
 
         await interaction.response.send_message(f"Infraction issued and {user.display_name} has been notified.", ephemeral=True)
@@ -106,7 +119,11 @@ class StaffCommands(commands.Cog):
         )
         embed.set_image(url=SERVER_START_BANNER)
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
-        await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
+        if channel:
+            try:
+                await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
+            except Exception:
+                pass
         await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
 
     @app_commands.command(name="serverstop", description="End a session")
@@ -119,14 +136,21 @@ class StaffCommands(commands.Cog):
         )
         embed.set_image(url=SERVER_SHUTDOWN_BANNER)
         channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
-        await channel.send(embed=embed)
+        if channel:
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
         await interaction.response.send_message("Session ended.", ephemeral=True)
 
     @app_commands.command(name="say", description="Send a message as the bot")
     @app_commands.check(is_bod)
     @app_commands.describe(channel="Channel", message="Message content")
     async def say(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
-        await channel.send(message)
+        try:
+            await channel.send(message)
+        except Exception:
+            pass
         await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
 
     @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
@@ -138,7 +162,10 @@ class StaffCommands(commands.Cog):
             embed.title = title
         if image_url:
             embed.set_image(url=image_url)
-        await channel.send(embed=embed)
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            pass
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
 # ====== PUBLIC COMMANDS =======
@@ -155,9 +182,13 @@ class PublicCommands(commands.Cog):
         author_name = "Anonymous" if anonymous else interaction.user.display_name
         embed.set_footer(text=f"Suggested by {author_name}")
         channel = interaction.guild.get_channel(SUGGESTION_CHANNEL_ID)
-        msg = await channel.send(embed=embed)
-        await msg.add_reaction("👍")
-        await msg.add_reaction("👎")
+        if channel:
+            try:
+                msg = await channel.send(embed=embed)
+                await msg.add_reaction("👍")
+                await msg.add_reaction("👎")
+            except Exception:
+                pass
         await interaction.response.send_message("Your suggestion has been submitted.", ephemeral=True)
 
     @app_commands.command(name="partnerinfo", description="Information for partners and next steps")
@@ -189,7 +220,10 @@ class AutoResponder(commands.Cog):
 
         # Inactive, help, game, apply
         if content.startswith("-inactive"):
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             parts = message.content.split(maxsplit=1)
             mention_text = parts[1] if len(parts) > 1 else ""
             embed = discord.Embed(
@@ -197,10 +231,16 @@ class AutoResponder(commands.Cog):
                 description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
                 color=discord.Color.orange()
             )
-            await message.channel.send(embed=embed)
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
 
         elif content == "-game":
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             embed = discord.Embed(
                 title="Here is some in-game information!",
                 description=("Steps to join in-game:\n"
@@ -209,25 +249,40 @@ class AutoResponder(commands.Cog):
                              "3. Go to servers, join by code: vcJJf"),
                 color=discord.Color.blue()
             )
-            await message.channel.send(embed=embed)
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
 
         elif content == "-apply":
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             embed = discord.Embed(
                 title="📋 Staff Applications",
                 description="To apply for staff, please visit <#1371272557969281166>!",
                 color=discord.Color.green()
             )
-            await message.channel.send(embed=embed)
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
 
         elif content == "-help":
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             embed = discord.Embed(
                 title="❓ Need Assistance?",
                 description="Open a ticket in <#1371272558221066261>.",
                 color=discord.Color.blurple()
             )
-            await message.channel.send(embed=embed)
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
 
         # Partnership message trigger via -partnerinfo (message command)
         if content == "-partnerinfo":
@@ -247,7 +302,10 @@ class AutoResponder(commands.Cog):
                 color=discord.Color.blue()
             )
             embed.set_image(url=SUPPORT_EMBED_BANNER)
-            await message.channel.send(embed=embed)
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
 
         # Partnership command via reply + -partnership
         if message.reference and "-partnership" in content and any(role.id in STAFF_ROLES for role in message.author.roles):
@@ -255,13 +313,15 @@ class AutoResponder(commands.Cog):
                 replied_msg = await message.channel.fetch_message(message.reference.message_id)
                 partner_channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
                 if not partner_channel:
-                    await message.channel.send("Partnership channel not found. Contact an admin.")
+                    try:
+                        await message.channel.send("Partnership channel not found. Contact an admin.", delete_after=10)
+                    except Exception:
+                        pass
                     return
 
                 # Determine representative member in the guild
                 rep_member = None
                 try:
-                    # If the replied author is a Member, use it, otherwise fetch
                     if isinstance(replied_msg.author, discord.Member):
                         rep_member = replied_msg.author
                     else:
@@ -276,17 +336,17 @@ class AutoResponder(commands.Cog):
                         if rep_member and (str(rep_member.id) in m.content or rep_member.mention in m.content):
                             is_duplicate = True
                             break
-                        # also check by matching the content text exactly (safe fallback)
                         if replied_msg.content and replied_msg.content in m.content:
                             is_duplicate = True
                             break
                 except Exception:
-                    # if history can't be read, proceed to post (safer to post than to silently fail)
                     is_duplicate = False
 
                 if is_duplicate:
-                    # Inform the staff member in the origin channel (temporary message), but do NOT post duplicate in partnership channel
-                    await message.channel.send("Partnership already exists for that representative in the partnership channel.", delete_after=10)
+                    try:
+                        await message.channel.send("Partnership already exists for that representative in the partnership channel.", delete_after=10)
+                    except Exception:
+                        pass
                     return
 
                 msg_content = (
@@ -296,7 +356,10 @@ class AutoResponder(commands.Cog):
                 )
 
                 # Send ONLY the required plain text to partnership channel (no embeds, no titles, no extra text)
-                await partner_channel.send(msg_content)
+                try:
+                    await partner_channel.send(msg_content)
+                except Exception:
+                    pass
 
                 # Assign partnership role to the representative (if possible)
                 try:
@@ -304,22 +367,51 @@ class AutoResponder(commands.Cog):
                     if partner_role and rep_member:
                         await rep_member.add_roles(partner_role, reason=f"Assigned partnership role by {message.author}")
                 except discord.Forbidden:
-                    # cannot assign role, ignore silently
                     pass
                 except Exception:
                     pass
 
-                # Intentionally silent on success (no confirmation message)
+                # Intentionally silent on success
             except Exception as e:
-                await message.channel.send(f"Error logging partnership: {e}", delete_after=10)
+                try:
+                    await message.channel.send(f"Error logging partnership: {e}", delete_after=10)
+                except Exception:
+                    pass
 
-        # Command logging for message-based commands starting with "/"
-        if message.content.startswith("/"):
-            try:
-                ch = bot.get_channel(LOGGING_CHANNEL_ID)
-                await ch.send(f"{message.author.mention} used command: {message.content}")
-            except:
-                pass
+        # Command logging for message-based commands and '-' triggers (embed, no pings)
+        try:
+            log_ch = bot.get_channel(LOGGING_CHANNEL_ID)
+            if log_ch:
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+                # Log slash-like messages (starting with '/')
+                if message.content.startswith("/"):
+                    embed = discord.Embed(title="Command Used", color=discord.Color.blue())
+                    embed.add_field(name="User", value=f"{message.author}", inline=True)
+                    embed.add_field(name="Command", value=message.content, inline=True)
+                    channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
+                    embed.add_field(name="Channel", value=channel_info, inline=True)
+                    embed.set_footer(text=f"At {now_str}")
+                    try:
+                        await log_ch.send(embed=embed)
+                    except Exception:
+                        pass
+
+                # Log message-trigger commands that start with '-' (e.g., -inactive, -partnerinfo, -apply, etc.)
+                if message.content.startswith("-"):
+                    embed = discord.Embed(title="Message Command Used", color=discord.Color.blue())
+                    embed.add_field(name="User", value=f"{message.author}", inline=True)
+                    embed.add_field(name="Message", value=message.content, inline=True)
+                    channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
+                    embed.add_field(name="Channel", value=channel_info, inline=True)
+                    embed.set_footer(text=f"At {now_str}")
+                    try:
+                        await log_ch.send(embed=embed)
+                    except Exception:
+                        pass
+        except Exception:
+            # keep logging failures silent
+            pass
 
         await bot.process_commands(message)
 
@@ -339,7 +431,6 @@ async def on_member_join(member):
     try:
         account_age_days = (now - member.created_at).days
     except Exception:
-        # fallback if created_at has no tzinfo or other issue
         account_age_days = (now - datetime.utcnow()).days
 
     if account_age_days < NEW_ACCOUNT_DAYS:
@@ -347,10 +438,13 @@ async def on_member_join(member):
         if channel:
             embed = discord.Embed(
                 title="⚠️ New Account Joined",
-                description=f"{member.mention} joined. Account is {account_age_days} days old.",
+                description=f"{member.display_name} ({member.id}) joined. Account is {account_age_days} days old.",
                 color=discord.Color.orange()
             )
-            await channel.send(embed=embed)
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
 
     # Raid detection
     recent_joins_filtered = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
@@ -362,7 +456,10 @@ async def on_member_join(member):
                 description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
                 color=discord.Color.red()
             )
-            await channel.send(embed=embed)
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
 
 # Background task: inactive staff scan
 @tasks.loop(hours=24)
@@ -383,7 +480,7 @@ async def check_inactive_staff():
                             last_message_time = msg.created_at
                             break
                 except Exception:
-                    # in case of permission/rate issues, skip this channel
+                    # permission/rate issues: skip channel
                     continue
                 if last_message_time:
                     break
@@ -391,12 +488,14 @@ async def check_inactive_staff():
                 if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
                     embed = discord.Embed(
                         title="⚠️ Inactive Staff Member",
-                        description=f"{member.mention} has not sent a message in {INACTIVE_DAYS} days.",
+                        description=f"{member.display_name} ({member.id}) has not sent a message in {INACTIVE_DAYS} days.",
                         color=discord.Color.orange()
                     )
-                    await channel.send(embed=embed)
+                    try:
+                        await channel.send(embed=embed)
+                    except Exception:
+                        pass
             except Exception:
-                # avoid crashing on timezone or other issues
                 continue
 
 # ====== TICKET CHANNEL HANDLING & SERVER WARNING EVENTS =======
@@ -405,7 +504,6 @@ async def on_guild_channel_create(channel):
     # When a new text channel is created under the ticket category, send the support welcome embed
     try:
         if isinstance(channel, discord.TextChannel) and channel.category_id == TICKET_CATEGORY_ID:
-            # Send the exact message text required, with an embed that only contains the support image
             welcome_text = (
                 "Hello! Thank you for contacting the Iowa State Roleplay Support Team.\n"
                 "Please state the reason for opening the ticket, and a support member will respond when they're available!"
@@ -415,24 +513,22 @@ async def on_guild_channel_create(channel):
             try:
                 await channel.send(content=welcome_text, embed=embed)
             except Exception:
-                # avoid crashing if send fails
                 pass
             return
 
         # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID)
-        try:
-            warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
-            if warn_ch:
-                embed = discord.Embed(
-                    title="🔔 Channel Created",
-                    description=f"Channel {channel.mention} was created in {channel.guild.name}.",
-                    color=discord.Color.orange()
-                )
+        warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        if warn_ch:
+            embed = discord.Embed(
+                title="🔔 Channel Created",
+                description=f"Channel {getattr(channel, 'mention', getattr(channel, 'name', str(channel)))} was created in {channel.guild.name}.",
+                color=discord.Color.orange()
+            )
+            try:
                 await warn_ch.send(embed=embed)
-        except Exception:
-            pass
+            except Exception:
+                pass
     except Exception:
-        # avoid crashing on unexpected errors
         pass
 
 @bot.event
@@ -445,14 +541,16 @@ async def on_guild_channel_delete(channel):
                 description=f"Channel `{getattr(channel, 'name', 'unknown')}` was deleted in {channel.guild.name}.",
                 color=discord.Color.orange()
             )
-            await warn_ch.send(embed=embed)
+            try:
+                await warn_ch.send(embed=embed)
+            except Exception:
+                pass
     except Exception:
         pass
 
 @bot.event
 async def on_guild_channel_update(before, after):
     try:
-        # Only notify if name or topic changed (major changes)
         changed = []
         if getattr(before, "name", None) != getattr(after, "name", None):
             changed.append(f"Name: `{before.name}` -> `{after.name}`")
@@ -463,10 +561,13 @@ async def on_guild_channel_update(before, after):
             if warn_ch:
                 embed = discord.Embed(
                     title="✏️ Channel Updated",
-                    description=f"Channel {after.mention} was updated.\n" + "\n".join(changed),
+                    description=f"Channel {getattr(after, 'mention', getattr(after, 'name', str(after)))} was updated.\n" + "\n".join(changed),
                     color=discord.Color.orange()
                 )
-                await warn_ch.send(embed=embed)
+                try:
+                    await warn_ch.send(embed=embed)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -480,7 +581,10 @@ async def on_guild_role_create(role):
                 description=f"Role `{role.name}` was created.",
                 color=discord.Color.orange()
             )
-            await warn_ch.send(embed=embed)
+            try:
+                await warn_ch.send(embed=embed)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -494,7 +598,10 @@ async def on_guild_role_delete(role):
                 description=f"Role `{role.name}` was deleted.",
                 color=discord.Color.orange()
             )
-            await warn_ch.send(embed=embed)
+            try:
+                await warn_ch.send(embed=embed)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -516,15 +623,17 @@ async def on_guild_role_update(before, after):
                     description=f"Role `{after.name}` was updated.\n" + "\n".join(changes),
                     color=discord.Color.orange()
                 )
-                await warn_ch.send(embed=embed)
+                try:
+                    await warn_ch.send(embed=embed)
+                except Exception:
+                    pass
     except Exception:
         pass
 
-# Log application (slash) command usage to moderation-logs
+# Log application (slash) command usage to moderation-logs (embed to avoid ping)
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
-        # application_command is the type for slash/app commands
         if interaction.type == discord.InteractionType.application_command:
             cmd_name = ""
             try:
@@ -535,32 +644,72 @@ async def on_interaction(interaction: discord.Interaction):
             try:
                 ch = bot.get_channel(LOGGING_CHANNEL_ID)
                 if ch:
-                    await ch.send(f"{interaction.user.mention} used command: /{cmd_name}")
+                    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    embed = discord.Embed(title="Slash Command Used", color=discord.Color.blue())
+                    embed.add_field(name="User", value=f"{interaction.user}", inline=True)
+                    embed.add_field(name="Command", value=f"/{cmd_name}", inline=True)
+                    channel_info = "DM"
+                    try:
+                        if interaction.channel:
+                            channel_info = getattr(interaction.channel, "mention", getattr(interaction.channel, "name", "Unknown"))
+                    except Exception:
+                        channel_info = "Unknown"
+                    embed.add_field(name="Channel", value=channel_info, inline=True)
+                    embed.set_footer(text=f"At {now_str}")
+                    try:
+                        await ch.send(embed=embed)
+                    except Exception:
+                        pass
             except Exception:
                 pass
     except Exception:
-        # keep failure silent
         pass
 
 # ====== BOT EVENTS =======
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-    await bot.add_cog(StaffCommands(bot))
-    await bot.add_cog(PublicCommands(bot))
-    await bot.add_cog(AutoResponder(bot))
+    logger.info(f"Logged in as {bot.user}")
+    # prevent duplicate cog registration on reconnect
+    if not bot.get_cog("StaffCommands"):
+        try:
+            await bot.add_cog(StaffCommands(bot))
+        except Exception:
+            pass
+    if not bot.get_cog("PublicCommands"):
+        try:
+            await bot.add_cog(PublicCommands(bot))
+        except Exception:
+            pass
+    if not bot.get_cog("AutoResponder"):
+        try:
+            await bot.add_cog(AutoResponder(bot))
+        except Exception:
+            pass
 
     guild_obj = discord.Object(id=MAIN_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild_obj)
-    await bot.tree.sync(guild=guild_obj)
-    print("Slash commands synced.")
+    try:
+        bot.tree.copy_global_to(guild=guild_obj)
+        await bot.tree.sync(guild=guild_obj)
+        logger.info("Slash commands synced.")
+    except Exception:
+        logger.exception("Failed to sync slash commands")
 
     check_inactive_staff.start()
 
 @bot.event
 async def on_guild_join(guild):
-    owner = await bot.fetch_user(OWNER_ID)
-    await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
-    await guild.leave()
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        try:
+            await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
+        except Exception:
+            # owner DMs blocked or failed
+            pass
+    except Exception:
+        pass
+    try:
+        await guild.leave()
+    except Exception:
+        pass
 
 bot.run(TOKEN)
