@@ -3,7 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 
 # ====== CONFIG =======
@@ -25,7 +25,7 @@ SSU_ROLE_ID = 1371272556820041854
 
 # New ticket/category and support embed config
 TICKET_CATEGORY_ID = 1450278544008679425
-SUPPORT_EMBED_BANNER = "https://cdn.discordapp.com/attachments/1449498805517942805/1449498852662181888/image.png?ex=6941c180&is=69407000&hm=a2d7c7418ad2a26a93c3ce7f42c242c5e365aadeaae37589a8585a3e3805b609&"
+SUPPORT_EMBED_BANNER = "https://cdn.discordapp.com/attachments/1449498805517942805/1449498852662181888/image.png"
 
 SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
@@ -229,6 +229,26 @@ class AutoResponder(commands.Cog):
             )
             await message.channel.send(embed=embed)
 
+        # Partnership message trigger via -partnerinfo (message command)
+        if content == "-partnerinfo":
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            embed = discord.Embed(
+                title="🤝 Partnership Information",
+                description=(
+                    "Hello! Thank you for Partnering with Iowa State Roleplay.\n\n"
+                    "Here are your next steps:\n"
+                    "• Please read the <#1396510203532546200>\n"
+                    "• Send your server ad so it can be posted in <#1421873146834718740>\n"
+                    "• Wait for further instructions from a support member"
+                ),
+                color=discord.Color.blue()
+            )
+            embed.set_image(url=SUPPORT_EMBED_BANNER)
+            await message.channel.send(embed=embed)
+
         # Partnership command via reply + -partnership
         if message.reference and "-partnership" in content and any(role.id in STAFF_ROLES for role in message.author.roles):
             try:
@@ -238,18 +258,62 @@ class AutoResponder(commands.Cog):
                     await message.channel.send("Partnership channel not found. Contact an admin.")
                     return
 
+                # Determine representative member in the guild
+                rep_member = None
+                try:
+                    # If the replied author is a Member, use it, otherwise fetch
+                    if isinstance(replied_msg.author, discord.Member):
+                        rep_member = replied_msg.author
+                    else:
+                        rep_member = message.guild.get_member(replied_msg.author.id)
+                except Exception:
+                    rep_member = None
+
+                # Duplicate check: look for the representative's ID or mention in recent partnership messages
+                is_duplicate = False
+                try:
+                    async for m in partner_channel.history(limit=500):
+                        if rep_member and (str(rep_member.id) in m.content or rep_member.mention in m.content):
+                            is_duplicate = True
+                            break
+                        # also check by matching the content text exactly (safe fallback)
+                        if replied_msg.content and replied_msg.content in m.content:
+                            is_duplicate = True
+                            break
+                except Exception:
+                    # if history can't be read, proceed to post (safer to post than to silently fail)
+                    is_duplicate = False
+
+                if is_duplicate:
+                    # Inform the staff member in the origin channel (temporary message), but do NOT post duplicate in partnership channel
+                    await message.channel.send("Partnership already exists for that representative in the partnership channel.", delete_after=10)
+                    return
+
                 msg_content = (
                     f"Staff Member: {message.author.mention}\n"
                     f"Representative: {replied_msg.author.mention}\n"
-                    f"Content: {replied_msg.content}"
+                    f"Content:\n{replied_msg.content}"
                 )
 
+                # Send ONLY the required plain text to partnership channel (no embeds, no titles, no extra text)
                 await partner_channel.send(msg_content)
-                await message.channel.send("Partnership logged successfully.", delete_after=10)
+
+                # Assign partnership role to the representative (if possible)
+                try:
+                    partner_role = message.guild.get_role(1392729143375822898)
+                    if partner_role and rep_member:
+                        await rep_member.add_roles(partner_role, reason=f"Assigned partnership role by {message.author}")
+                except discord.Forbidden:
+                    # cannot assign role, ignore silently
+                    pass
+                except Exception:
+                    pass
+
+                # Intentionally silent on success (no confirmation message)
             except Exception as e:
                 await message.channel.send(f"Error logging partnership: {e}", delete_after=10)
 
-        # Command logging
+        # Command logging for message-based commands starting with "/"
         if message.content.startswith("/"):
             try:
                 ch = bot.get_channel(LOGGING_CHANNEL_ID)
@@ -268,30 +332,37 @@ recent_joins = []
 
 @bot.event
 async def on_member_join(member):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     recent_joins.append((member.id, now))
 
     # New account detection
-    account_age_days = (now - member.created_at).days
+    try:
+        account_age_days = (now - member.created_at).days
+    except Exception:
+        # fallback if created_at has no tzinfo or other issue
+        account_age_days = (now - datetime.utcnow()).days
+
     if account_age_days < NEW_ACCOUNT_DAYS:
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
-        embed = discord.Embed(
-            title="⚠️ New Account Joined",
-            description=f"{member.mention} joined. Account is {account_age_days} days old.",
-            color=discord.Color.orange()
-        )
-        await channel.send(embed=embed)
+        if channel:
+            embed = discord.Embed(
+                title="⚠️ New Account Joined",
+                description=f"{member.mention} joined. Account is {account_age_days} days old.",
+                color=discord.Color.orange()
+            )
+            await channel.send(embed=embed)
 
     # Raid detection
     recent_joins_filtered = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
     if len(recent_joins_filtered) >= JOIN_THRESHOLD:
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
-        embed = discord.Embed(
-            title="⚠️ Potential Raid Detected",
-            description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
-            color=discord.Color.red()
-        )
-        await channel.send(embed=embed)
+        if channel:
+            embed = discord.Embed(
+                title="⚠️ Potential Raid Detected",
+                description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
+                color=discord.Color.red()
+            )
+            await channel.send(embed=embed)
 
 # Background task: inactive staff scan
 @tasks.loop(hours=24)
@@ -299,42 +370,176 @@ async def check_inactive_staff():
     await bot.wait_until_ready()
     guild = bot.get_guild(MAIN_GUILD_ID)
     channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    if not guild or not channel:
+        return
     for member in guild.members:
         if any(role.id in STAFF_ROLES for role in member.roles) and not member.bot:
             last_message_time = None
             for text_channel in guild.text_channels:
-                async for msg in text_channel.history(limit=1000):
-                    if msg.author.id == member.id:
-                        last_message_time = msg.created_at
-                        break
+                try:
+                    async for msg in text_channel.history(limit=1000):
+                        if msg.author.id == member.id:
+                            last_message_time = msg.created_at
+                            break
+                except Exception:
+                    # in case of permission/rate issues, skip this channel
+                    continue
                 if last_message_time:
                     break
-            if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
-                embed = discord.Embed(
-                    title="⚠️ Inactive Staff Member",
-                    description=f"{member.mention} has not sent a message in {INACTIVE_DAYS} days.",
-                    color=discord.Color.orange()
-                )
-                await channel.send(embed=embed)
+            try:
+                if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
+                    embed = discord.Embed(
+                        title="⚠️ Inactive Staff Member",
+                        description=f"{member.mention} has not sent a message in {INACTIVE_DAYS} days.",
+                        color=discord.Color.orange()
+                    )
+                    await channel.send(embed=embed)
+            except Exception:
+                # avoid crashing on timezone or other issues
+                continue
 
-# ====== TICKET CHANNEL HANDLING =======
+# ====== TICKET CHANNEL HANDLING & SERVER WARNING EVENTS =======
 @bot.event
 async def on_guild_channel_create(channel):
     # When a new text channel is created under the ticket category, send the support welcome embed
     try:
         if isinstance(channel, discord.TextChannel) and channel.category_id == TICKET_CATEGORY_ID:
-            embed = discord.Embed(
-                title="Hello! Thank you for contacting the Iowa State Roleplay Support Team.",
-                description=(
-                    "Please state the reason for opening the ticket, and a support member will respond when they're available!"
-                ),
-                color=discord.Color.blurple()
+            # Send the exact message text required, with an embed that only contains the support image
+            welcome_text = (
+                "Hello! Thank you for contacting the Iowa State Roleplay Support Team.\n"
+                "Please state the reason for opening the ticket, and a support member will respond when they're available!"
             )
+            embed = discord.Embed(color=discord.Color.blurple())
             embed.set_image(url=SUPPORT_EMBED_BANNER)
-            await channel.send(embed=embed)
+            try:
+                await channel.send(content=welcome_text, embed=embed)
+            except Exception:
+                # avoid crashing if send fails
+                pass
+            return
+
+        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID)
+        try:
+            warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+            if warn_ch:
+                embed = discord.Embed(
+                    title="🔔 Channel Created",
+                    description=f"Channel {channel.mention} was created in {channel.guild.name}.",
+                    color=discord.Color.orange()
+                )
+                await warn_ch.send(embed=embed)
+        except Exception:
+            pass
     except Exception:
         # avoid crashing on unexpected errors
+        pass
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    try:
+        warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        if warn_ch:
+            embed = discord.Embed(
+                title="🗑️ Channel Deleted",
+                description=f"Channel `{getattr(channel, 'name', 'unknown')}` was deleted in {channel.guild.name}.",
+                color=discord.Color.orange()
+            )
+            await warn_ch.send(embed=embed)
+    except Exception:
+        pass
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    try:
+        # Only notify if name or topic changed (major changes)
+        changed = []
+        if getattr(before, "name", None) != getattr(after, "name", None):
+            changed.append(f"Name: `{before.name}` -> `{after.name}`")
+        if getattr(before, "topic", None) != getattr(after, "topic", None):
+            changed.append("Topic updated.")
+        if changed:
+            warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+            if warn_ch:
+                embed = discord.Embed(
+                    title="✏️ Channel Updated",
+                    description=f"Channel {after.mention} was updated.\n" + "\n".join(changed),
+                    color=discord.Color.orange()
+                )
+                await warn_ch.send(embed=embed)
+    except Exception:
+        pass
+
+@bot.event
+async def on_guild_role_create(role):
+    try:
+        warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        if warn_ch:
+            embed = discord.Embed(
+                title="➕ Role Created",
+                description=f"Role `{role.name}` was created.",
+                color=discord.Color.orange()
+            )
+            await warn_ch.send(embed=embed)
+    except Exception:
+        pass
+
+@bot.event
+async def on_guild_role_delete(role):
+    try:
+        warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+        if warn_ch:
+            embed = discord.Embed(
+                title="🗑️ Role Deleted",
+                description=f"Role `{role.name}` was deleted.",
+                color=discord.Color.orange()
+            )
+            await warn_ch.send(embed=embed)
+    except Exception:
+        pass
+
+@bot.event
+async def on_guild_role_update(before, after):
+    try:
+        changes = []
+        if before.name != after.name:
+            changes.append(f"Name: `{before.name}` -> `{after.name}`")
+        if before.color != after.color:
+            changes.append("Color changed.")
+        if before.permissions != after.permissions:
+            changes.append("Permissions changed.")
+        if changes:
+            warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
+            if warn_ch:
+                embed = discord.Embed(
+                    title="✏️ Role Updated",
+                    description=f"Role `{after.name}` was updated.\n" + "\n".join(changes),
+                    color=discord.Color.orange()
+                )
+                await warn_ch.send(embed=embed)
+    except Exception:
+        pass
+
+# Log application (slash) command usage to moderation-logs
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    try:
+        # application_command is the type for slash/app commands
+        if interaction.type == discord.InteractionType.application_command:
+            cmd_name = ""
+            try:
+                if isinstance(interaction.data, dict):
+                    cmd_name = interaction.data.get("name", "")
+            except Exception:
+                cmd_name = ""
+            try:
+                ch = bot.get_channel(LOGGING_CHANNEL_ID)
+                if ch:
+                    await ch.send(f"{interaction.user.mention} used command: /{cmd_name}")
+            except Exception:
+                pass
+    except Exception:
+        # keep failure silent
         pass
 
 # ====== BOT EVENTS =======
