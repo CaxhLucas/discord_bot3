@@ -3,9 +3,10 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import random
 import logging
+from typing import Any, Dict
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -44,12 +45,104 @@ intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# In-memory store for detailed log data keyed by the message id the bot posts.
+# NOTE: This is in-memory only. Restarting the bot clears stored details.
+detailed_logs: Dict[int, Dict[str, Any]] = {}
+
+
+class ExpandView(discord.ui.View):
+    def __init__(self, key: int | None):
+        super().__init__(timeout=None)
+        # key will be set to the bot log message id after the message is sent
+        self.key = key
+
+    @discord.ui.button(label="Expand", style=discord.ButtonStyle.primary, custom_id="expand_button")
+    async def expand_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            key = self.key
+            if not key:
+                await interaction.response.send_message("Details are not available.", ephemeral=True)
+                return
+
+            details = detailed_logs.get(key)
+            if not details:
+                await interaction.response.send_message("Detailed information not available (possibly bot restarted).", ephemeral=True)
+                return
+
+            # Build an embed that contains as much detail as available
+            detail_embed = discord.Embed(title="Detailed Log Information", color=discord.Color.dark_blue())
+            # Add a timestamp if present
+            ts = details.get("timestamp")
+            if ts:
+                detail_embed.set_footer(text=f"Logged at {ts}")
+
+            # Add common fields if present
+            common_fields = [
+                ("Event Type", details.get("event_type")),
+                ("User", details.get("user")),
+                ("User ID", details.get("user_id")),
+                ("Channel", details.get("channel")),
+                ("Channel ID", details.get("channel_id")),
+                ("Guild", details.get("guild")),
+                ("Guild ID", details.get("guild_id")),
+                ("Message ID", details.get("message_id")),
+                ("Content", details.get("content")),
+                ("Extra", details.get("extra")),
+            ]
+            for name, val in common_fields:
+                if val is not None and val != "":
+                    # Limit field length to avoid embed overflow
+                    text = str(val)
+                    if len(text) > 1024:
+                        text = text[:1020] + "..."
+                    detail_embed.add_field(name=name, value=text, inline=False)
+
+            # If attachments exist, list them
+            attachments = details.get("attachments")
+            if attachments:
+                att_text = "\n".join(attachments)
+                if len(att_text) > 1024:
+                    att_text = att_text[:1020] + "..."
+                detail_embed.add_field(name="Attachments", value=att_text, inline=False)
+
+            await interaction.response.send_message(embed=detail_embed, ephemeral=True)
+        except Exception:
+            try:
+                await interaction.response.send_message("Failed to retrieve details.", ephemeral=True)
+            except Exception:
+                pass
+
+
 # ====== PERMISSION CHECKS =======
 def is_staff(interaction: discord.Interaction) -> bool:
     return any(role.id in STAFF_ROLES for role in interaction.user.roles)
 
+
 def is_bod(interaction: discord.Interaction) -> bool:
     return BOD_ROLE_ID in [role.id for role in interaction.user.roles]
+
+
+# ====== Helper for sending logs with "Expand" button =======
+async def send_embed_with_expand(channel: discord.abc.GuildChannel | discord.TextChannel, embed: discord.Embed, details: Dict[str, Any]):
+    """
+    Sends an embed to the given channel, attaches an Expand button, and stores the details dict
+    keyed by the message id so it can be shown when the button is pressed.
+    """
+    try:
+        view = ExpandView(None)
+        sent = await channel.send(embed=embed, view=view)
+        # store details keyed by the message id
+        details_copy = details.copy()
+        # ensure timestamp string exists
+        if "timestamp" not in details_copy:
+            details_copy["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        detailed_logs[sent.id] = details_copy
+        # set the view key to the message id for later lookup
+        view.key = sent.id
+    except Exception:
+        # Silently ignore failures to keep bot stable
+        pass
+
 
 # ====== STAFF COMMANDS =======
 class StaffCommands(commands.Cog):
@@ -168,6 +261,7 @@ class StaffCommands(commands.Cog):
             pass
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
+
 # ====== PUBLIC COMMANDS =======
 class PublicCommands(commands.Cog):
     def __init__(self, bot):
@@ -206,6 +300,7 @@ class PublicCommands(commands.Cog):
         )
         embed.set_image(url=SUPPORT_EMBED_BANNER)
         await interaction.response.send_message(embed=embed, ephemeral=False)
+
 
 # ====== AUTO RESPONDER =======
 class AutoResponder(commands.Cog):
@@ -378,7 +473,7 @@ class AutoResponder(commands.Cog):
                 except Exception:
                     pass
 
-        # Command logging for message-based commands and '-' triggers (embed, no pings)
+        # Command logging for message-based commands and '-' triggers (embed + Expand button)
         try:
             log_ch = bot.get_channel(LOGGING_CHANNEL_ID)
             if log_ch:
@@ -392,10 +487,24 @@ class AutoResponder(commands.Cog):
                     channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
                     embed.add_field(name="Channel", value=channel_info, inline=True)
                     embed.set_footer(text=f"At {now_str}")
-                    try:
-                        await log_ch.send(embed=embed)
-                    except Exception:
-                        pass
+
+                    details = {
+                        "event_type": "message_command",
+                        "user": f"{message.author} ({message.author.id})",
+                        "user_id": message.author.id,
+                        "command": message.content,
+                        "content": message.content,
+                        "channel": getattr(message.channel, "name", str(message.channel)),
+                        "channel_id": getattr(message.channel, "id", None),
+                        "guild": getattr(message.guild, "name", None),
+                        "guild_id": getattr(message.guild, "id", None),
+                        "message_id": message.id,
+                        "attachments": [a.url for a in message.attachments] if message.attachments else [],
+                        "timestamp": now_str,
+                        "extra": None,
+                    }
+                    # send embed with Expand button and store details
+                    await send_embed_with_expand(log_ch, embed, details)
 
                 # Log message-trigger commands that start with '-' (e.g., -inactive, -partnerinfo, -apply, etc.)
                 if message.content.startswith("-"):
@@ -405,22 +514,35 @@ class AutoResponder(commands.Cog):
                     channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
                     embed.add_field(name="Channel", value=channel_info, inline=True)
                     embed.set_footer(text=f"At {now_str}")
-                    try:
-                        await log_ch.send(embed=embed)
-                    except Exception:
-                        pass
+
+                    details = {
+                        "event_type": "message_trigger",
+                        "user": f"{message.author} ({message.author.id})",
+                        "user_id": message.author.id,
+                        "content": message.content,
+                        "channel": getattr(message.channel, "name", str(message.channel)),
+                        "channel_id": getattr(message.channel, "id", None),
+                        "guild": getattr(message.guild, "name", None),
+                        "guild_id": getattr(message.guild, "id", None),
+                        "message_id": message.id,
+                        "attachments": [a.url for a in message.attachments] if message.attachments else [],
+                        "timestamp": now_str,
+                        "extra": None,
+                    }
+                    await send_embed_with_expand(log_ch, embed, details)
         except Exception:
             # keep logging failures silent
             pass
 
         await bot.process_commands(message)
 
-# ====== SERVER WARNINGS =======
+
+# ====== SERVER WARNINGS (with Expand buttons) =======
 JOIN_THRESHOLD = 3
 JOIN_INTERVAL = 60  # seconds
 NEW_ACCOUNT_DAYS = 30
-INACTIVE_DAYS = 14
 recent_joins = []
+
 
 @bot.event
 async def on_member_join(member):
@@ -429,22 +551,33 @@ async def on_member_join(member):
 
     # New account detection
     try:
-        account_age_days = (now - member.created_at).days
+        account_age_days = (now - member.created_at.replace(tzinfo=timezone.utc)).days
     except Exception:
-        account_age_days = (now - datetime.utcnow()).days
+        account_age_days = (now - datetime.now(timezone.utc)).days
 
     if account_age_days < NEW_ACCOUNT_DAYS:
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if channel:
             embed = discord.Embed(
                 title="⚠️ New Account Joined",
-                description=f"{member.display_name} ({member.id}) joined. Account is {account_age_days} days old.",
+                description=f"{member.mention} joined. Account is {account_age_days} days old.",
                 color=discord.Color.orange()
             )
-            try:
-                await channel.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "new_account_join",
+                "user": f"{member} ({member.id})",
+                "user_id": member.id,
+                "content": None,
+                "channel": None,
+                "channel_id": None,
+                "guild": getattr(member.guild, "name", None),
+                "guild_id": getattr(member.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {"created_at": getattr(member, "created_at", None)},
+            }
+            await send_embed_with_expand(channel, embed, details)
 
     # Raid detection
     recent_joins_filtered = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
@@ -456,47 +589,22 @@ async def on_member_join(member):
                 description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
                 color=discord.Color.red()
             )
-            try:
-                await channel.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "raid_detected",
+                "user": None,
+                "user_id": None,
+                "content": None,
+                "channel": None,
+                "channel_id": None,
+                "guild": getattr(member.guild, "name", None),
+                "guild_id": getattr(member.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {"recent_joins": [r[0] for r in recent_joins_filtered]},
+            }
+            await send_embed_with_expand(channel, embed, details)
 
-# Background task: inactive staff scan
-@tasks.loop(hours=24)
-async def check_inactive_staff():
-    await bot.wait_until_ready()
-    guild = bot.get_guild(MAIN_GUILD_ID)
-    channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
-    now = datetime.now(timezone.utc)
-    if not guild or not channel:
-        return
-    for member in guild.members:
-        if any(role.id in STAFF_ROLES for role in member.roles) and not member.bot:
-            last_message_time = None
-            for text_channel in guild.text_channels:
-                try:
-                    async for msg in text_channel.history(limit=1000):
-                        if msg.author.id == member.id:
-                            last_message_time = msg.created_at
-                            break
-                except Exception:
-                    # permission/rate issues: skip channel
-                    continue
-                if last_message_time:
-                    break
-            try:
-                if not last_message_time or (now - last_message_time).days >= INACTIVE_DAYS:
-                    embed = discord.Embed(
-                        title="⚠️ Inactive Staff Member",
-                        description=f"{member.display_name} ({member.id}) has not sent a message in {INACTIVE_DAYS} days.",
-                        color=discord.Color.orange()
-                    )
-                    try:
-                        await channel.send(embed=embed)
-                    except Exception:
-                        pass
-            except Exception:
-                continue
 
 # ====== TICKET CHANNEL HANDLING & SERVER WARNING EVENTS =======
 @bot.event
@@ -516,7 +624,7 @@ async def on_guild_channel_create(channel):
                 pass
             return
 
-        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID)
+        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID) with Expand
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
@@ -524,12 +632,28 @@ async def on_guild_channel_create(channel):
                 description=f"Channel {getattr(channel, 'mention', getattr(channel, 'name', str(channel)))} was created in {channel.guild.name}.",
                 color=discord.Color.orange()
             )
-            try:
-                await warn_ch.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "channel_created",
+                "user": None,
+                "user_id": None,
+                "content": None,
+                "channel": getattr(channel, "name", None),
+                "channel_id": getattr(channel, "id", None),
+                "guild": getattr(channel.guild, "name", None),
+                "guild_id": getattr(channel.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {
+                    "category_id": getattr(channel, "category_id", None),
+                    "type": str(type(channel)),
+                },
+            }
+            await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
+        # avoid crashing on unexpected errors
         pass
+
 
 @bot.event
 async def on_guild_channel_delete(channel):
@@ -541,12 +665,24 @@ async def on_guild_channel_delete(channel):
                 description=f"Channel `{getattr(channel, 'name', 'unknown')}` was deleted in {channel.guild.name}.",
                 color=discord.Color.orange()
             )
-            try:
-                await warn_ch.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "channel_deleted",
+                "user": None,
+                "user_id": None,
+                "content": None,
+                "channel": getattr(channel, "name", None),
+                "channel_id": getattr(channel, "id", None),
+                "guild": getattr(channel.guild, "name", None),
+                "guild_id": getattr(channel.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {"category_id": getattr(channel, "category_id", None)},
+            }
+            await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
         pass
+
 
 @bot.event
 async def on_guild_channel_update(before, after):
@@ -564,12 +700,28 @@ async def on_guild_channel_update(before, after):
                     description=f"Channel {getattr(after, 'mention', getattr(after, 'name', str(after)))} was updated.\n" + "\n".join(changed),
                     color=discord.Color.orange()
                 )
-                try:
-                    await warn_ch.send(embed=embed)
-                except Exception:
-                    pass
+                details = {
+                    "event_type": "channel_updated",
+                    "user": None,
+                    "user_id": None,
+                    "content": None,
+                    "channel": getattr(after, "name", None),
+                    "channel_id": getattr(after, "id", None),
+                    "guild": getattr(after.guild, "name", None),
+                    "guild_id": getattr(after.guild, "id", None),
+                    "message_id": None,
+                    "attachments": [],
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "extra": {
+                        "changes": changed,
+                        "before": {"name": getattr(before, "name", None), "topic": getattr(before, "topic", None)},
+                        "after": {"name": getattr(after, "name", None), "topic": getattr(after, "topic", None)},
+                    },
+                }
+                await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
         pass
+
 
 @bot.event
 async def on_guild_role_create(role):
@@ -581,12 +733,27 @@ async def on_guild_role_create(role):
                 description=f"Role `{role.name}` was created.",
                 color=discord.Color.orange()
             )
-            try:
-                await warn_ch.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "role_created",
+                "user": None,
+                "user_id": None,
+                "content": None,
+                "channel": None,
+                "channel_id": None,
+                "guild": getattr(role.guild, "name", None),
+                "guild_id": getattr(role.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {
+                    "role_id": getattr(role, "id", None),
+                    "permissions": getattr(role, "permissions", None),
+                },
+            }
+            await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
         pass
+
 
 @bot.event
 async def on_guild_role_delete(role):
@@ -598,12 +765,24 @@ async def on_guild_role_delete(role):
                 description=f"Role `{role.name}` was deleted.",
                 color=discord.Color.orange()
             )
-            try:
-                await warn_ch.send(embed=embed)
-            except Exception:
-                pass
+            details = {
+                "event_type": "role_deleted",
+                "user": None,
+                "user_id": None,
+                "content": None,
+                "channel": None,
+                "channel_id": None,
+                "guild": getattr(role.guild, "name", None),
+                "guild_id": getattr(role.guild, "id", None),
+                "message_id": None,
+                "attachments": [],
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "extra": {"role_id": getattr(role, "id", None)},
+            }
+            await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
         pass
+
 
 @bot.event
 async def on_guild_role_update(before, after):
@@ -623,14 +802,26 @@ async def on_guild_role_update(before, after):
                     description=f"Role `{after.name}` was updated.\n" + "\n".join(changes),
                     color=discord.Color.orange()
                 )
-                try:
-                    await warn_ch.send(embed=embed)
-                except Exception:
-                    pass
+                details = {
+                    "event_type": "role_updated",
+                    "user": None,
+                    "user_id": None,
+                    "content": None,
+                    "channel": None,
+                    "channel_id": None,
+                    "guild": getattr(after.guild, "name", None),
+                    "guild_id": getattr(after.guild, "id", None),
+                    "message_id": None,
+                    "attachments": [],
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "extra": {"changes": changes},
+                }
+                await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
         pass
 
-# Log application (slash) command usage to moderation-logs (embed to avoid ping)
+
+# Log application (slash) command usage to moderation-logs (embed + Expand button)
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
@@ -656,14 +847,29 @@ async def on_interaction(interaction: discord.Interaction):
                         channel_info = "Unknown"
                     embed.add_field(name="Channel", value=channel_info, inline=True)
                     embed.set_footer(text=f"At {now_str}")
-                    try:
-                        await ch.send(embed=embed)
-                    except Exception:
-                        pass
+
+                    details = {
+                        "event_type": "slash_command",
+                        "user": f"{interaction.user} ({interaction.user.id})",
+                        "user_id": interaction.user.id,
+                        "command": f"/{cmd_name}",
+                        "content": None,
+                        "channel": channel_info,
+                        "channel_id": getattr(interaction.channel, "id", None) if interaction.channel else None,
+                        "guild": getattr(interaction.guild, "name", None),
+                        "guild_id": getattr(interaction.guild, "id", None),
+                        "message_id": None,
+                        "attachments": [],
+                        "timestamp": now_str,
+                        "extra": {"interaction_data": interaction.data},
+                    }
+                    await send_embed_with_expand(ch, embed, details)
             except Exception:
                 pass
     except Exception:
+        # keep failure silent
         pass
+
 
 # ====== BOT EVENTS =======
 @bot.event
@@ -694,7 +900,6 @@ async def on_ready():
     except Exception:
         logger.exception("Failed to sync slash commands")
 
-    check_inactive_staff.start()
 
 @bot.event
 async def on_guild_join(guild):
@@ -711,5 +916,6 @@ async def on_guild_join(guild):
         await guild.leave()
     except Exception:
         pass
+
 
 bot.run(TOKEN)
