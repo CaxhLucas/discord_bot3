@@ -136,20 +136,27 @@ async def archive_details_to_mod_channel(details: Dict[str, Any]) -> Optional[in
 
 async def send_embed_with_expand(target_channel: discord.abc.GuildChannel | discord.TextChannel, embed: discord.Embed, details: Dict[str, Any]):
     """
-    Sends an embed to the given target_channel, creates a detailed storage message in the mod-archive channel,
-    then attaches an Expand button to the embed where the button's custom_id references the archive message ID.
-
-    Archive storage is a message posted in MOD_ARCHIVE_CHANNEL_ID containing the JSON-encoded details inside a code block.
-    The Expand button custom_id is "expand:{archive_msg.id}" which the on_interaction handler will parse to fetch details.
+    Sends an embed to the given target_channel.
+    Only archive (store in MOD_ARCHIVE) and attach Expand button for event types: 'infract' and 'promote'.
+    For other event types, just post the embed (no archive, no Expand button).
     """
     try:
-        archive_msg_id = await archive_details_to_mod_channel(details)
-        archive_id = archive_msg_id or 0
-        view = ExpandView(archive_id)
-        try:
-            await target_channel.send(embed=embed, view=view)
-        except Exception:
-            # fallback: send without view
+        event_type = details.get("event_type") if isinstance(details, dict) else None
+        # Only archive infractions and promotions for now
+        if event_type in ("infract", "promote"):
+            archive_msg_id = await archive_details_to_mod_channel(details)
+            archive_id = archive_msg_id or 0
+            view = ExpandView(archive_id)
+            try:
+                await target_channel.send(embed=embed, view=view)
+            except Exception:
+                # fallback: send without view
+                try:
+                    await target_channel.send(embed=embed)
+                except Exception:
+                    pass
+        else:
+            # Do not archive; just send embed without view
             try:
                 await target_channel.send(embed=embed)
             except Exception:
@@ -217,11 +224,38 @@ class StaffCommands(commands.Cog):
         embed.add_field(name="Reason", value=reason, inline=False)
         embed.add_field(name="Promoted By", value=interaction.user.mention, inline=True)
         channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
+        promotion_message = None
         if channel:
             try:
-                await channel.send(content=user.mention, embed=embed)
+                promotion_message = await channel.send(content=user.mention, embed=embed)
             except Exception:
                 pass
+
+        # Archive promotion details to mod-archive and send log with Expand button
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        details = {
+            "event_type": "promote",
+            "user": f"{user} ({getattr(user, 'id', None)})",
+            "user_id": getattr(user, "id", None),
+            "new_rank": new_rank,
+            "reason": reason,
+            "promoted_by": f"{interaction.user} ({interaction.user.id})",
+            "timestamp": now_str,
+            "promotion_message_id": getattr(promotion_message, "id", None),
+            "extra": None,
+        }
+        log_ch = await ensure_channel(LOGGING_CHANNEL_ID)
+        if log_ch:
+            log_embed = discord.Embed(title="Staff Promotion Logged", color=discord.Color.green())
+            log_embed.add_field(name="User", value=f"{user}", inline=True)
+            log_embed.add_field(name="New Rank", value=new_rank, inline=True)
+            log_embed.add_field(name="Promoted By", value=f"{interaction.user}", inline=True)
+            log_embed.set_footer(text=f"At {now_str}")
+            try:
+                await send_embed_with_expand(log_ch, log_embed, details)
+            except Exception:
+                pass
+
         await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
 
     @app_commands.command(name="infract", description="Issue an infraction to a staff member")
@@ -352,68 +386,86 @@ class StaffCommands(commands.Cog):
             pass
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
-    # Infraction subcommands (lookup & scan)
-    @app_commands.command(name="infraction_lookup", description="Lookup archived staff infractions (BOD only)")
+    # Updated Infraction lookup: required staff member only, public embed
+    @app_commands.command(name="infraction_lookup", description="Lookup prior infractions for a staff member (BOD only)")
     @app_commands.check(is_bod)
-    @app_commands.describe(user="Filter by staff member", code="Filter by infraction code", limit="How many archive messages to search (max 1000)")
-    async def infraction_lookup(self, interaction: discord.Interaction, user: Optional[discord.Member] = None, code: Optional[str] = None, limit: int = 200):
+    @app_commands.describe(staff="Staff member to lookup (the person who received infractions)")
+    async def infraction_lookup(self, interaction: discord.Interaction, staff: discord.Member):
         """
-        Lookup infractions in the mod-archive channel.
+        Lookup infractions in the mod-archive channel for the supplied staff member.
+        Posts a public, clean embed titled 'Infractions Lookup' in the invoking channel.
         """
-        await interaction.response.defer(ephemeral=True)
-        if limit <= 0:
-            limit = 200
-        if limit > 1000:
-            limit = 1000
-
-        found: List[Dict[str, Any]] = []
+        await interaction.response.defer(ephemeral=False)  # public response
         archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
         if not archive_ch:
             await interaction.followup.send("Mod archive channel is not available.", ephemeral=True)
             return
 
-        # iterate archive messages, parse JSON, match event_type 'infract'
+        found: List[Dict[str, Any]] = []
+        lookup_id = getattr(staff, "id", None)
         try:
-            async for m in archive_ch.history(limit=limit):
+            async for m in archive_ch.history(limit=2000):
                 parsed = _extract_json_from_codeblock(m.content or "")
                 if not parsed:
                     continue
                 if parsed.get("event_type") != "infract":
                     continue
-                # match by user id or code if provided
-                if user:
-                    uid = getattr(user, "id", None)
-                    if parsed.get("user_id") and int(parsed.get("user_id")) != uid:
-                        continue
-                if code:
-                    if str(parsed.get("code")) != str(code):
-                        continue
-                parsed["_archive_message_id"] = m.id
-                found.append(parsed)
-                if len(found) >= 50:
-                    break
+                # match by user_id if present, else try to find staff id in 'user' string
+                uid = parsed.get("user_id")
+                if uid:
+                    try:
+                        if int(uid) == int(lookup_id):
+                            parsed["_archive_message_id"] = m.id
+                            found.append(parsed)
+                    except Exception:
+                        # fallback to substring match
+                        if str(lookup_id) in str(parsed.get("user", "")):
+                            parsed["_archive_message_id"] = m.id
+                            found.append(parsed)
+                else:
+                    if str(lookup_id) in str(parsed.get("user", "")):
+                        parsed["_archive_message_id"] = m.id
+                        found.append(parsed)
         except Exception:
             pass
 
         if not found:
-            await interaction.followup.send("No matching infractions found in mod archive.", ephemeral=True)
+            await interaction.followup.send(f"No infractions found for {staff.display_name}.", ephemeral=False)
             return
 
-        # build a compact embed listing results
-        embed = discord.Embed(title="Infraction Lookup Results", color=discord.Color.orange())
-        lines = []
-        for idx, item in enumerate(found[:20], start=1):
-            ts = item.get("timestamp", "")
-            code_str = str(item.get("code", "N/A"))
-            user_str = item.get("user", "Unknown")
+        # Build a clean public embed
+        embed = discord.Embed(title="Infractions Lookup", color=discord.Color.orange())
+        embed.set_thumbnail(url=staff.display_avatar.url if getattr(staff, "display_avatar", None) else None)
+        embed.add_field(name="Staff Member", value=f"{staff} • {staff.id}", inline=False)
+        embed.add_field(name="Total Infractions Found", value=str(len(found)), inline=False)
+
+        # Show up to 10 most recent infractions in the embed with clear fields
+        shown = 0
+        for item in found[:10]:
+            shown += 1
+            code = item.get("code", "N/A")
             punishment = item.get("punishment", "N/A")
-            issuer = item.get("issued_by", "Unknown")
-            archive_id = item.get("_archive_message_id")
-            line = f"{idx}) [{ts}] Code: `{code_str}` • User: {user_str} • Punishment: {punishment} • Issued by: {issuer} • ArchiveID: `{archive_id}`"
-            lines.append(line)
-        embed.description = "\n".join(lines[:25])
-        embed.set_footer(text=f"Showing {len(found[:20])} of {len(found)} matches. Use the ArchiveID with Expand buttons in logs/mod-archive.")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            reason = item.get("reason", "N/A")
+            issued_by = item.get("issued_by", "N/A")
+            ts = item.get("timestamp", "N/A")
+            archive_id = item.get("_archive_message_id", "N/A")
+            # Add as a single field per infraction for clarity
+            value = (
+                f"• Code: `{code}`\n"
+                f"• Punishment: {punishment}\n"
+                f"• Reason: {reason}\n"
+                f"• Issued By: {issued_by}\n"
+                f"• When: {ts}\n"
+                f"• ArchiveID: `{archive_id}`"
+            )
+            embed.add_field(name=f"Infraction #{shown}", value=value, inline=False)
+
+        if len(found) > 10:
+            embed.set_footer(text=f"Showing 10 most recent of {len(found)} infractions. Use archive messages to Expand for full details.")
+        else:
+            embed.set_footer(text="Use Expand on archive messages for full details.")
+
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
     @app_commands.command(name="infraction_scan", description="Scan the old infractions channel and archive missing entries (BOD only)")
     @app_commands.check(is_bod)
@@ -796,7 +848,7 @@ class AutoResponder(commands.Cog):
                 except Exception:
                     pass
 
-        # Command logging for message-based commands and '-' triggers (embed + Expand button backed by Discord storage)
+        # Command logging for message-based commands and '-' triggers (embed + Expand button backed by Discord storage for infractions/promotions only)
         try:
             log_ch = bot.get_channel(LOGGING_CHANNEL_ID)
             if log_ch:
@@ -826,7 +878,7 @@ class AutoResponder(commands.Cog):
                         "timestamp": now_str,
                         "extra": None,
                     }
-                    # send embed with Expand button and store details into mod-archive
+                    # send embed (no archive for message_command since only infractions/promotions are archived)
                     await send_embed_with_expand(log_ch, embed, details)
 
                 # Log message-trigger commands that start with '-' (e.g., -inactive, -partnerinfo, -apply, etc.)
@@ -860,7 +912,7 @@ class AutoResponder(commands.Cog):
         await bot.process_commands(message)
 
 
-# ====== SERVER WARNINGS (reworked to use Expand + archive) =======
+# ====== SERVER WARNINGS (reworked to use Expand + archive only for infractions/promotions) =======
 JOIN_THRESHOLD = 3
 JOIN_INTERVAL = 60  # seconds
 NEW_ACCOUNT_DAYS = 30
@@ -900,6 +952,7 @@ async def on_member_join(member):
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
                 "extra": {"created_at": getattr(member, "created_at", None)},
             }
+            # This will post embed to BOD_ALERT_CHANNEL_ID but will NOT archive (event_type not infract/promote)
             await send_embed_with_expand(channel, embed, details)
 
     # Raid detection
@@ -947,7 +1000,7 @@ async def on_guild_channel_create(channel):
                 pass
             return
 
-        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID) with Expand
+        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID) with an embed (no archive)
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
@@ -1144,7 +1197,7 @@ async def on_guild_role_update(before, after):
         pass
 
 
-# Log application (slash) command usage to moderation-logs (embed + Expand button)
+# Log application (slash) command usage to moderation-logs (embed; archived only if event_type is infract/promote)
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
