@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, Optional, List
 import json
 import re
+import inspect
 
 # ====== CONFIG =======
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -351,7 +352,7 @@ class StaffCommands(commands.Cog):
             pass
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
-    # Infraction subcommands (group) implemented as two separate commands with shared prefix
+    # Infraction subcommands (lookup & scan)
     @app_commands.command(name="infraction_lookup", description="Lookup archived staff infractions (BOD only)")
     @app_commands.check(is_bod)
     @app_commands.describe(user="Filter by staff member", code="Filter by infraction code", limit="How many archive messages to search (max 1000)")
@@ -1326,31 +1327,47 @@ async def on_interaction(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user}")
-    # prevent duplicate cog registration on reconnect
-    if not bot.get_cog("StaffCommands"):
-        try:
-            bot.add_cog(StaffCommands(bot))
-        except Exception:
-            pass
-    if not bot.get_cog("PublicCommands"):
-        try:
-            bot.add_cog(PublicCommands(bot))
-        except Exception:
-            pass
-    if not bot.get_cog("AutoResponder"):
-        try:
-            bot.add_cog(AutoResponder(bot))
-        except Exception:
-            pass
 
-    guild_obj = discord.Object(id=MAIN_GUILD_ID)
+    # add cogs safely (await if needed)
     try:
-        bot.tree.copy_global_to(guild=guild_obj)
-        # sync without awaiting blocking if running in some environments; keep await as previous pattern
-        asyncio.create_task(bot.tree.sync(guild=guild_obj))
-        logger.info("Slash commands sync scheduled.")
+        res = bot.add_cog(StaffCommands(bot))
+        if inspect.isawaitable(res):
+            await res
     except Exception:
-        logger.exception("Failed to schedule slash command sync")
+        pass
+
+    try:
+        res = bot.add_cog(PublicCommands(bot))
+        if inspect.isawaitable(res):
+            await res
+    except Exception:
+        pass
+
+    try:
+        res = bot.add_cog(AutoResponder(bot))
+        if inspect.isawaitable(res):
+            await res
+    except Exception:
+        pass
+
+    # Ensure commands are only synced once per bot session
+    if not getattr(bot, "app_commands_synced", False):
+        try:
+            guild_obj = discord.Object(id=MAIN_GUILD_ID)
+            # copy globals to guild (so slash commands appear instantly)
+            try:
+                bot.tree.copy_global_to(guild=guild_obj)
+            except Exception:
+                # ignore if not supported in environment
+                pass
+            # sync and await properly
+            sync_res = bot.tree.sync(guild=guild_obj)
+            if inspect.isawaitable(sync_res):
+                await sync_res
+            bot.app_commands_synced = True
+            logger.info("Slash commands synced.")
+        except Exception:
+            logger.exception("Failed to sync slash commands")
 
 
 @bot.event
