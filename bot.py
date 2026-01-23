@@ -12,7 +12,10 @@ import re
 import inspect
 
 # ====== CONFIG =======
-TOKEN = os.environ["DISCORD_TOKEN"]
+TOKEN = os.environ.get("DISCORD_TOKEN")
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN environment variable is not set")
+
 MAIN_GUILD_ID = 1371272556820041849
 
 BOD_ROLE_ID = 1371272557034209493
@@ -28,22 +31,29 @@ BOD_ALERT_CHANNEL_ID = 1443716401176248492
 PARTNERSHIP_CHANNEL_ID = 1421873146834718740
 SSU_ROLE_ID = 1371272556820041854
 
-# Internal Affairs related IDs
-IA_ROLE_ID = 1404679512276602881
-IA_AGENT_ROLE_ID = 1400189498087964734
-IA_SUPERVISOR_ROLE_ID = 1400189341590093967
-# BOD role already present as BOD_ROLE_ID
-
-# IA category where case channels are created
-IA_CATEGORY_ID = 1452383883336351794
+# Ticket & support config (from ticket manager)
+SUPPORT_CHANNEL_ID = 1371272558221066261
+TICKET_CATEGORY_ID = 1450278544008679425
+TICKET_LOGS_CHANNEL_ID = 1371272560192258130
 
 # Mod archive (persistent storage inside Discord)
 MOD_ARCHIVE_CHANNEL_ID = 1459286015905890345
 
-# New ticket/category and support embed config
-TICKET_CATEGORY_ID = 1450278544008679425
-SUPPORT_EMBED_BANNER = "https://cdn.discordapp.com/attachments/1449498805517942805/1449498852662181888/image.png"
+# Internal Affairs related IDs
+IA_ROLE_ID = 1404679512276602881
+IA_AGENT_ROLE_ID = 1400189498087964734
+IA_SUPERVISOR_ROLE_ID = 1400189341590093967
 
+# Ticket owning roles per type (ticket manager)
+PARTNERSHIP_ROLE_ID = 1371272556987940903
+HR_ROLE_ID = BOD_ROLE_ID  # Board of Directors for HR tickets
+GENERAL_SUPPORT_ROLE_ID = 1373338084195958957
+
+# Evidence channel used in IA embed note (kept)
+EVIDENCE_CHANNEL_ID = 1404677593856348301
+
+# Banner / support images
+SUPPORT_EMBED_BANNER = "https://media.discordapp.net/attachments/1449498805517942805/1449498852662181888/image.png"
 SERVER_START_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022463045863/IMG_2908.png"
 SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705722978/1405970022710644796/IMG_2909.png"
 
@@ -61,30 +71,41 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+# ------------------------
+# Shared utilities & types
+# ------------------------
 class ExpandView(discord.ui.View):
-    def __init__(self, archive_message_id: int):
+    def __init__(self, archive_message_id: Optional[int]):
         super().__init__(timeout=None)
-        # store archive message id in the view for convenience; button custom_id will also carry it
         self.archive_message_id = archive_message_id
-        # Add a button whose custom_id encodes the archive message id
-        custom_id = f"expand:{archive_message_id}"
-        self.add_item(discord.ui.Button(label="Expand", style=discord.ButtonStyle.primary, custom_id=custom_id))
+        # Only add a button when we have a valid positive archive message id
+        if archive_message_id and isinstance(archive_message_id, int) and archive_message_id > 0:
+            custom_id = f"expand:{archive_message_id}"
+            self.add_item(discord.ui.Button(label="Expand", style=discord.ButtonStyle.primary, custom_id=custom_id))
 
 
-# ====== PERMISSION CHECKS =======
+# Permission checks used for app commands (ensure interaction.user is Member)
 def is_staff(interaction: discord.Interaction) -> bool:
-    return any(role.id in STAFF_ROLES for role in interaction.user.roles)
+    user = interaction.user
+    if not isinstance(user, discord.Member):
+        return False
+    return any(role.id in STAFF_ROLES for role in user.roles)
 
 
 def is_bod(interaction: discord.Interaction) -> bool:
-    return BOD_ROLE_ID in [role.id for role in interaction.user.roles]
+    user = interaction.user
+    if not isinstance(user, discord.Member):
+        return False
+    return any(role.id == BOD_ROLE_ID for role in user.roles)
 
 
 def is_ia(interaction: discord.Interaction) -> bool:
-    return IA_ROLE_ID in [role.id for role in interaction.user.roles]
+    user = interaction.user
+    if not isinstance(user, discord.Member):
+        return False
+    return any(role.id == IA_ROLE_ID for role in user.roles)
 
 
-# ====== Helper utilities =======
 async def ensure_channel(channel_id: int) -> Optional[discord.TextChannel]:
     ch = bot.get_channel(channel_id)
     if ch:
@@ -104,9 +125,7 @@ def _extract_json_from_codeblock(content: str) -> Optional[Dict[str, Any]]:
     if not content:
         return None
     content = content.strip()
-    # codeblock pattern
     if content.startswith("```") and content.endswith("```"):
-        # remove first line fence + optional language and final fence
         lines = content.splitlines()
         if len(lines) >= 3:
             inner = "\n".join(lines[1:-1])
@@ -117,7 +136,6 @@ def _extract_json_from_codeblock(content: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(inner)
     except Exception:
-        # try to find a JSON object inside
         m = re.search(r"\{.*\}", inner, flags=re.DOTALL)
         if m:
             try:
@@ -128,10 +146,6 @@ def _extract_json_from_codeblock(content: str) -> Optional[Dict[str, Any]]:
 
 
 async def archive_details_to_mod_channel(details: Dict[str, Any]) -> Optional[int]:
-    """
-    Post a JSON-encoded details message to the MOD_ARCHIVE_CHANNEL_ID.
-    Returns the archive message id or None.
-    """
     archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
     if not archive_ch:
         return None
@@ -148,10 +162,6 @@ async def archive_details_to_mod_channel(details: Dict[str, Any]) -> Optional[in
 
 
 async def edit_archive_message(archive_msg_id: int, details: Dict[str, Any]) -> bool:
-    """
-    Edit an existing MOD_ARCHIVE message (archive_msg_id) to contain updated JSON details.
-    Returns True on success.
-    """
     archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
     if not archive_ch:
         return False
@@ -173,26 +183,28 @@ async def edit_archive_message(archive_msg_id: int, details: Dict[str, Any]) -> 
 async def send_embed_with_expand(target_channel: discord.abc.GuildChannel | discord.TextChannel, embed: discord.Embed, details: Dict[str, Any]):
     """
     Sends an embed to the given target_channel.
-    Only archive (store in MOD_ARCHIVE) and attach Expand button for event types: 'infract', 'promote', 'ia_case'.
+    Only archive (store in MOD_ARCHIVE) and attach Expand button for event types: 'infract', 'promote', 'ia_case', 'ticket'.
     For other event types, just post the embed (no archive, no Expand button).
     """
     try:
         event_type = details.get("event_type") if isinstance(details, dict) else None
-        # Only archive infractions, promotions and IA cases
-        if event_type in ("infract", "promote", "ia_case"):
+        if event_type in ("infract", "promote", "ia_case", "ticket"):
             archive_msg_id = await archive_details_to_mod_channel(details)
-            archive_id = archive_msg_id or 0
-            view = ExpandView(archive_id)
-            try:
-                await target_channel.send(embed=embed, view=view)
-            except Exception:
-                # fallback: send without view
+            if archive_msg_id:
+                view = ExpandView(archive_msg_id)
+                try:
+                    await target_channel.send(embed=embed, view=view)
+                except Exception:
+                    try:
+                        await target_channel.send(embed=embed)
+                    except Exception:
+                        pass
+            else:
                 try:
                     await target_channel.send(embed=embed)
                 except Exception:
                     pass
         else:
-            # Do not archive; just send embed without view
             try:
                 await target_channel.send(embed=embed)
             except Exception:
@@ -202,9 +214,6 @@ async def send_embed_with_expand(target_channel: discord.abc.GuildChannel | disc
 
 
 async def find_archived_infractions_in_mod(limit: int = 1000) -> List[Dict[str, Any]]:
-    """
-    Return list of parsed archived detail dicts from MOD_ARCHIVE_CHANNEL_ID (most recent first).
-    """
     archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
     results: List[Dict[str, Any]] = []
     if not archive_ch:
@@ -213,7 +222,6 @@ async def find_archived_infractions_in_mod(limit: int = 1000) -> List[Dict[str, 
         async for m in archive_ch.history(limit=limit):
             parsed = _extract_json_from_codeblock(m.content or "")
             if parsed:
-                # attach archive_message_id for reference
                 parsed["_archive_message_id"] = m.id
                 results.append(parsed)
     except Exception:
@@ -222,9 +230,6 @@ async def find_archived_infractions_in_mod(limit: int = 1000) -> List[Dict[str, 
 
 
 async def archive_has_code(code: Any, lookback: int = 200) -> bool:
-    """
-    Check recent MOD_ARCHIVE messages for a matching infraction code to avoid duplicates.
-    """
     archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
     if not archive_ch:
         return False
@@ -234,7 +239,6 @@ async def archive_has_code(code: Any, lookback: int = 200) -> bool:
             if parsed and parsed.get("event_type") == "infract":
                 if str(parsed.get("code")) == str(code):
                     return True
-                # also check original infraction message id if present
                 if parsed.get("infraction_message_id") and parsed.get("infraction_message_id") == code:
                     return True
     except Exception:
@@ -242,12 +246,8 @@ async def archive_has_code(code: Any, lookback: int = 200) -> bool:
     return False
 
 
-# Shared scanning helper (used by command and startup import)
+# Shared scanning helper (from infractions file)
 async def scan_and_archive_infractions(limit: int = 500) -> Dict[str, int]:
-    """
-    Scan INFRACTION_CHANNEL_ID up to `limit` messages and archive missing infractions into MOD_ARCHIVE.
-    Returns summary dict with counts.
-    """
     infra_ch = await ensure_channel(INFRACTION_CHANNEL_ID)
     if not infra_ch:
         return {"scanned": 0, "archived": 0, "skipped": 0, "errors": 0, "available": False}
@@ -379,8 +379,319 @@ async def scan_and_archive_infractions(limit: int = 500) -> Dict[str, int]:
     return {"scanned": scanned, "archived": archived, "skipped": skipped, "errors": errors, "available": True}
 
 
-# ====== Slash command groups: Infraction & Promotion & IA =======
+# -------------
+# Ticket system
+# -------------
+TICKET_TYPES = {
+    "partnership": {
+        "title": "Partnership Ticket",
+        "description": "Click on the button below to open a Partnership ticket!",
+        "role_ping": PARTNERSHIP_ROLE_ID,
+        "owner_role_id": PARTNERSHIP_ROLE_ID,
+    },
+    "hr": {
+        "title": "HR Ticket",
+        "description": "Click on the button below to open a HR ticket!",
+        "role_ping": HR_ROLE_ID,
+        "owner_role_id": HR_ROLE_ID,
+    },
+    "general": {
+        "title": "Support Ticket",
+        "description": "Click on the button below to open a Support ticket!",
+        "role_ping": GENERAL_SUPPORT_ROLE_ID,
+        "owner_role_id": GENERAL_SUPPORT_ROLE_ID,
+    },
+}
 
+TICKET_UI_ARCHIVE_TYPE = "ticket_ui"
+TICKET_ARCHIVE_TYPE = "ticket"
+
+
+def sanitize_channel_name(display_name: str) -> str:
+    name = display_name.lower().replace(" ", "-")
+    name = re.sub(r"[^a-z0-9\-]", "", name)
+    name = re.sub(r"-{2,}", "-", name)
+    name = name.strip("-")
+    if not name:
+        name = "user"
+    return name[:80]
+
+
+async def ensure_ticket_ui_messages():
+    support_ch = await ensure_channel(SUPPORT_CHANNEL_ID)
+    if not support_ch:
+        logger.warning("Support channel not available for ticket UI creation.")
+        return
+
+    archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+    existing_ui = {}
+    archive_msg_id = None
+    if archive_ch:
+        try:
+            async for m in archive_ch.history(limit=1000):
+                parsed = _extract_json_from_codeblock(m.content or "")
+                if parsed and parsed.get("event_type") == TICKET_UI_ARCHIVE_TYPE:
+                    existing_ui = parsed.get("ui", {}) or {}
+                    archive_msg_id = m.id
+                    break
+        except Exception:
+            pass
+
+    ui_map = dict(existing_ui)
+    changed = False
+    for tkey, tconf in TICKET_TYPES.items():
+        mid = ui_map.get(tkey)
+        ok = False
+        if mid:
+            try:
+                m = await support_ch.fetch_message(int(mid))
+                ok = True
+            except Exception:
+                ok = False
+
+        if not ok:
+            embed = discord.Embed(title=tconf["title"], description=tconf["description"], color=discord.Color.blurple())
+            embed.set_image(url=SUPPORT_EMBED_BANNER)
+            view = discord.ui.View()
+            btn = discord.ui.Button(label=f"Open {tconf['title']}", style=discord.ButtonStyle.primary, custom_id=f"ticket_create:{tkey}")
+            view.add_item(btn)
+            try:
+                sent = await support_ch.send(embed=embed, view=view)
+                ui_map[tkey] = sent.id
+                changed = True
+            except Exception:
+                logger.exception(f"Failed to send ticket UI for {tkey}")
+
+    if changed and archive_ch:
+        record = {
+            "event_type": TICKET_UI_ARCHIVE_TYPE,
+            "ui": ui_map,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        }
+        try:
+            if archive_msg_id:
+                await edit_archive_message(archive_msg_id, record)
+            else:
+                await archive_details_to_mod_channel(record)
+        except Exception:
+            pass
+
+
+async def create_ticket_channel_for(user: discord.Member, ticket_type: str, opener: discord.Member):
+    guild = user.guild
+    if not guild:
+        return None, None
+
+    sanitized = sanitize_channel_name(user.display_name or user.name)
+    last4 = str(user.id)[-4:]
+    channel_name = f"{sanitized}-{ticket_type}-{last4}"
+
+    category = discord.utils.get(guild.categories, id=TICKET_CATEGORY_ID)
+    overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
+    everyone_role = guild.default_role
+    overwrites[everyone_role] = discord.PermissionOverwrite(view_channel=False)
+
+    overwrites[user] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True)
+    overwrites[opener] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True)
+
+    owner_role_id = TICKET_TYPES[ticket_type]["owner_role_id"]
+    owner_role = guild.get_role(owner_role_id)
+    if owner_role:
+        overwrites[owner_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+    for rid in STAFF_ROLES:
+        r = guild.get_role(rid)
+        if r:
+            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+    me = guild.me or guild.get_member(bot.user.id)
+    if me:
+        overwrites[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_messages=True, manage_channels=True)
+
+    try:
+        chan = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites, reason=f"Ticket opened by {opener}")
+    except Exception:
+        logger.exception("Failed to create ticket channel")
+        return None, None
+
+    conf = TICKET_TYPES[ticket_type]
+    role_ping = conf.get("role_ping")
+    ping_text = f"<@&{role_ping}> " if role_ping else ""
+    initial_embed = discord.Embed(title=conf["title"], description=f"{ping_text}Hello! Thank you for contacting the Iowa State Roleplay Support Team.\nPlease state the reason for opening the ticket, and a support member will respond when they're available!", color=discord.Color.green())
+    initial_embed.set_image(url=SUPPORT_EMBED_BANNER)
+    view = discord.ui.View()
+    claim_btn = discord.ui.Button(label="Claim", style=discord.ButtonStyle.secondary, custom_id=f"ticket_claim:{chan.id}")
+    close_btn = discord.ui.Button(label="Close", style=discord.ButtonStyle.danger, custom_id=f"ticket_close:{chan.id}")
+    view.add_item(claim_btn)
+    view.add_item(close_btn)
+
+    try:
+        sent = await chan.send(embed=initial_embed, view=view)
+    except Exception:
+        sent = None
+
+    created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    details = {
+        "event_type": TICKET_ARCHIVE_TYPE,
+        "ticket_type": ticket_type,
+        "channel_id": chan.id,
+        "channel_name": chan.name,
+        "opener": f"{user} ({user.id})",
+        "opener_id": user.id,
+        "opened_by": f"{opener} ({opener.id})",
+        "opened_by_id": opener.id,
+        "created_at": created_at,
+        "status": "open",
+        "claimers": [],
+        "close_reason": None,
+        "closed_at": None,
+        "closed_by": None,
+    }
+    archive_msg_id = None
+    if await ensure_channel(MOD_ARCHIVE_CHANNEL_ID):
+        archive_msg_id = await archive_details_to_mod_channel(details)
+        try:
+            await chan.edit(topic=f"ticket_archive:{archive_msg_id} type:{ticket_type}")
+        except Exception:
+            pass
+
+    return chan, archive_msg_id
+
+
+async def find_ticket_archive_by_channel(channel: discord.TextChannel) -> Optional[Dict[str, Any]]:
+    topic = channel.topic or ""
+    m = re.search(r"ticket_archive:(\d+)", topic)
+    if m:
+        aid = int(m.group(1))
+        arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        if arch_ch:
+            try:
+                msg = await arch_ch.fetch_message(aid)
+                parsed = _extract_json_from_codeblock(msg.content or "")
+                if parsed and parsed.get("event_type") == TICKET_ARCHIVE_TYPE:
+                    parsed["_archive_message_id"] = msg.id
+                    return parsed
+            except Exception:
+                pass
+    arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+    if not arch_ch:
+        return None
+    try:
+        async for mmsg in arch_ch.history(limit=2000):
+            p = _extract_json_from_codeblock(mmsg.content or "")
+            if p and p.get("event_type") == TICKET_ARCHIVE_TYPE and p.get("channel_id") == channel.id:
+                p["_archive_message_id"] = mmsg.id
+                return p
+    except Exception:
+        pass
+    return None
+
+
+# ------------------------
+# Modal for ticket close
+# ------------------------
+class CloseReasonModal(discord.ui.Modal, title="Close Ticket Reason"):
+    reason = discord.ui.TextInput(label="Reason for closing", style=discord.TextStyle.long, required=False, max_length=1000)
+
+    def __init__(self, archive_id: Optional[int], requester_id: int, channel_id: int):
+        super().__init__()
+        self.archive_id = archive_id
+        self.requester_id = requester_id
+        self.channel_id = channel_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        reason_text = self.reason.value.strip() if self.reason.value else "No reason provided"
+        chan = interaction.client.get_channel(self.channel_id)
+        if not isinstance(chan, discord.TextChannel):
+            try:
+                await interaction.response.send_message("Ticket channel not found.", ephemeral=True)
+            except Exception:
+                pass
+            return
+
+        details = None
+        archive_id = self.archive_id
+        arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        archive_msg = None
+        if archive_id and arch_ch:
+            try:
+                archive_msg = await arch_ch.fetch_message(archive_id)
+                details = _extract_json_from_codeblock(archive_msg.content or "")
+            except Exception:
+                details = None
+
+        if not details:
+            details = await find_ticket_archive_by_channel(chan) or {}
+            archive_id = details.get("_archive_message_id", archive_id)
+
+        details["status"] = "closed"
+        details["close_reason"] = reason_text
+        details["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        try:
+            requester = interaction.client.get_user(self.requester_id) or await interaction.client.fetch_user(self.requester_id)
+            details["closed_by"] = f"{requester} ({self.requester_id})"
+        except Exception:
+            details["closed_by"] = f"{self.requester_id}"
+
+        if archive_id:
+            try:
+                await edit_archive_message(archive_id, details)
+            except Exception:
+                pass
+
+        try:
+            await chan.set_permissions(chan.guild.default_role, view_channel=True, send_messages=False)
+        except Exception:
+            pass
+
+        owner_role = chan.guild.get_role(TICKET_TYPES.get(details.get("ticket_type"), {}).get("owner_role_id"))
+        if owner_role:
+            try:
+                await chan.set_permissions(owner_role, view_channel=True, send_messages=False)
+            except Exception:
+                pass
+        for rid in STAFF_ROLES:
+            try:
+                r = chan.guild.get_role(rid)
+                if r:
+                    await chan.set_permissions(r, view_channel=True, send_messages=False)
+            except Exception:
+                pass
+
+        try:
+            if chan.name.endswith("-open"):
+                await chan.edit(name=chan.name.replace("-open", "-closed"))
+            else:
+                if not chan.name.endswith("-closed"):
+                    await chan.edit(name=f"{chan.name}-closed")
+        except Exception:
+            pass
+
+        try:
+            logs_ch = await ensure_channel(TICKET_LOGS_CHANNEL_ID)
+            if logs_ch:
+                embed = discord.Embed(title=f"Ticket Closed — {chan.name}", color=discord.Color.red())
+                embed.add_field(name="Ticket", value=chan.mention, inline=False)
+                embed.add_field(name="Type", value=details.get("ticket_type", "N/A"), inline=True)
+                embed.add_field(name="Opened By", value=details.get("opener", "N/A"), inline=True)
+                embed.add_field(name="Opened At", value=details.get("created_at", "N/A"), inline=True)
+                embed.add_field(name="Closed At", value=details.get("closed_at", "N/A"), inline=True)
+                embed.add_field(name="Closed By", value=details.get("closed_by", "N/A"), inline=True)
+                claimers = details.get("claimers", []) or []
+                claimers_text = ", ".join([f"<@{c}>" for c in claimers]) if claimers else "None"
+                embed.add_field(name="Claimers", value=claimers_text, inline=False)
+                embed.add_field(name="Close Reason", value=details.get("close_reason", "No reason provided"), inline=False)
+                await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+        try:
+            await interaction.response.send_message("Ticket closed.", ephemeral=True)
+        except Exception:
+            pass
+
+
+# ====== Slash command groups: Infraction & Promotion & IA =======
 class InfractionGroup(app_commands.Group):
     def __init__(self):
         super().__init__(name="infraction", description="Infraction commands (BOD only)")
@@ -576,7 +887,6 @@ class IAGroup(app_commands.Group):
     ):
         await interaction.response.defer(ephemeral=False)
 
-        # Compute next case number by scanning MOD_ARCHIVE for ia_case entries
         case_num = 1
         archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
         if archive_ch:
@@ -593,24 +903,20 @@ class IAGroup(app_commands.Group):
             except Exception:
                 pass
 
-        case_str = f"{case_num:06d}"  # six digits zero-padded
+        case_str = f"{case_num:06d}"
 
-        # Create channel under IA_CATEGORY_ID
         guild = interaction.guild
         if not guild:
             await interaction.followup.send("Guild context unavailable.", ephemeral=True)
             return
 
-        category = discord.utils.get(guild.categories, id=IA_CATEGORY_ID)
-        # Build channel name
+        category = discord.utils.get(guild.categories, id=TICKET_CATEGORY_ID)
         channel_name = f"ia-case-{case_str}-open"
 
-        # Prepare permission overwrites
         overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
         everyone_role = guild.default_role
         overwrites[everyone_role] = discord.PermissionOverwrite(view_channel=False)
 
-        # Always allow IA role
         ia_role = guild.get_role(IA_ROLE_ID)
         if ia_role:
             overwrites[ia_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
@@ -618,7 +924,6 @@ class IAGroup(app_commands.Group):
         allowed_role_ids = []
         allowed_member_ids = []
 
-        # Add selected roles
         if include_agents:
             r = guild.get_role(IA_AGENT_ROLE_ID)
             if r:
@@ -635,7 +940,6 @@ class IAGroup(app_commands.Group):
                 overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
                 allowed_role_ids.append(r.id)
 
-        # Include server owner(s)
         if include_owners:
             try:
                 owner = await guild.fetch_member(guild.owner_id)
@@ -644,14 +948,12 @@ class IAGroup(app_commands.Group):
             except Exception:
                 pass
 
-        # Allow the investigated user to view and send (as requested)
         try:
             overwrites[investigated] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
             allowed_member_ids.append(investigated.id)
         except Exception:
             pass
 
-        # Allow the opener (interaction.user)
         try:
             opener_member = interaction.user
             overwrites[opener_member] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
@@ -659,19 +961,16 @@ class IAGroup(app_commands.Group):
         except Exception:
             pass
 
-        # Ensure bot can see/send
         me = guild.me or guild.get_member(bot.user.id)
         if me:
             overwrites[me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True, read_message_history=True, manage_channels=True)
 
-        # Create channel
         try:
             chan = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites, reason=f"IA case opened by {interaction.user}")
         except Exception as e:
             await interaction.followup.send(f"Failed to create case channel: {e}", ephemeral=True)
             return
 
-        # Prepare case embed (exact structure you requested, grammar lightly cleaned)
         case_embed = discord.Embed(title=f"Case {case_str}", color=discord.Color.red())
         case_embed.add_field(name="Investigating", value=f"{investigated.mention}", inline=False)
         case_embed.add_field(name="For", value=reason, inline=False)
@@ -679,14 +978,13 @@ class IAGroup(app_commands.Group):
 
         note_text = (
             "Note: DO NOT DM ANYONE about this case. Any information about this case must be put here or in evidence "
-            f"<#{1404677593856348301}>. If you are the one being investigated, or you have any involvement; DO NOT LEAVE "
+            f"<#{EVIDENCE_CHANNEL_ID}>. If you are the one being investigated, or you have any involvement; DO NOT LEAVE "
             "THE SERVER. If you do and rejoin, you WILL be staff-blacklisted <@&1371272556832882693>. After the case is closed "
             "DO NOT delete this channel so we have a record of this case."
         )
         case_embed.add_field(name="Important", value=note_text, inline=False)
         case_embed.add_field(name="Close", value='To close this case, please type `-close`', inline=False)
 
-        # Send initial embed to the new channel and pin it
         try:
             sent = await chan.send(content=f"<@&{IA_ROLE_ID}> {investigated.mention}", embed=case_embed)
             try:
@@ -694,10 +992,8 @@ class IAGroup(app_commands.Group):
             except Exception:
                 pass
         except Exception:
-            # even if send fails, continue
             sent = None
 
-        # Archive the case to MOD_ARCHIVE
         created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         archive_details = {
             "event_type": "ia_case",
@@ -713,7 +1009,7 @@ class IAGroup(app_commands.Group):
             "opened_by_id": interaction.user.id,
             "allowed_role_ids": allowed_role_ids,
             "allowed_member_ids": allowed_member_ids,
-            "claimers": [],  # list of user ids
+            "claimers": [],
             "status": "open",
             "created_at": created_at,
             "closed_at": None,
@@ -722,7 +1018,6 @@ class IAGroup(app_commands.Group):
         archive_msg_id = None
         if await ensure_channel(MOD_ARCHIVE_CHANNEL_ID):
             archive_msg_id = await archive_details_to_mod_channel(archive_details)
-        # Save archive reference in channel topic for quick lookup
         try:
             topic = f"ia_archive:{archive_msg_id or 0} case:{case_str}"
             await chan.edit(topic=topic)
@@ -730,8 +1025,6 @@ class IAGroup(app_commands.Group):
             pass
 
         await interaction.followup.send(f"Opened IA case {case_str} in {chan.mention}", ephemeral=False)
-
-    # end open command
 
 
 # ====== STAFF COMMANDS (existing ones kept) =======
@@ -759,7 +1052,6 @@ class StaffCommands(commands.Cog):
             except Exception:
                 pass
 
-        # Archive promotion details to mod-archive and send log with Expand button
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         details = {
             "event_type": "promote",
@@ -790,7 +1082,6 @@ class StaffCommands(commands.Cog):
     @app_commands.check(is_bod)
     @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
     async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
-        # Preserve original behavior but also archive the infraction to MOD_ARCHIVE and moderation logs
         code = random.randint(1000, 9999)
         embed = discord.Embed(
             title=f"⚠️ Staff Infraction - Code {code}",
@@ -806,14 +1097,12 @@ class StaffCommands(commands.Cog):
         sent_inf_msg = None
         if infra_channel:
             try:
-                # keep ping behavior as before
                 sent_inf_msg = await infra_channel.send(content=user.mention, embed=embed)
             except discord.Forbidden:
                 pass
             except Exception:
                 pass
 
-        # Prepare details for archive and mod-log
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         details = {
             "event_type": "infract",
@@ -830,7 +1119,6 @@ class StaffCommands(commands.Cog):
             "extra": None,
         }
 
-        # Send a moderation-log entry (with Expand button) to LOGGING_CHANNEL_ID and archive in MOD_ARCHIVE
         log_ch = await ensure_channel(LOGGING_CHANNEL_ID)
         if log_ch:
             log_embed = discord.Embed(title="Staff Infraction Issued", color=discord.Color.red())
@@ -844,7 +1132,6 @@ class StaffCommands(commands.Cog):
             except Exception:
                 pass
 
-        # Also attempt to DM the user as before
         try:
             await user.send(embed=embed)
         except discord.Forbidden:
@@ -854,7 +1141,6 @@ class StaffCommands(commands.Cog):
 
         await interaction.response.send_message(f"Infraction issued and {user.display_name} has been notified.", ephemeral=True)
 
-    # other staff commands retained unchanged...
     @app_commands.command(name="serverstart", description="Start a session")
     @app_commands.check(is_bod)
     async def serverstart(self, interaction: discord.Interaction):
@@ -969,19 +1255,17 @@ class AutoResponder(commands.Cog):
         # IA close/reopen handling (only in IA category)
         try:
             ch = message.channel
-            if isinstance(ch, discord.TextChannel) and ch.category_id == IA_CATEGORY_ID:
+            if isinstance(ch, discord.TextChannel) and ch.category_id == TICKET_CATEGORY_ID:
                 # -close command
                 if content.startswith("-close"):
-                    # Only IA role can run -close
                     member = message.author
-                    if not any(r.id == IA_ROLE_ID for r in member.roles):
+                    if not any(r.id == IA_ROLE_ID for r in member.roles if isinstance(r, discord.Role)):
                         try:
                             await message.channel.send("You do not have permission to close this case.", delete_after=8)
                         except Exception:
                             pass
                         return
 
-                    # fetch archive id from channel topic
                     topic = ch.topic or ""
                     match = re.search(r"ia_archive:(\d+)", topic)
                     archive_id = int(match.group(1)) if match else None
@@ -995,7 +1279,6 @@ class AutoResponder(commands.Cog):
                             except Exception:
                                 archive_msg = None
 
-                    # if archive missing, try to find by channel id
                     details = None
                     if archive_msg:
                         details = _extract_json_from_codeblock(archive_msg.content or "")
@@ -1026,7 +1309,6 @@ class AutoResponder(commands.Cog):
                             "allowed_member_ids": [],
                         }
 
-                    # update claimers: include existing claimers + closer
                     claimers = details.get("claimers", []) or []
                     if member.id not in claimers:
                         claimers.append(member.id)
@@ -1035,21 +1317,17 @@ class AutoResponder(commands.Cog):
                     details["closed_by"] = f"{member} ({member.id})"
                     details["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-                    # update archived message
                     if archive_id and details:
                         try:
                             await edit_archive_message(archive_id, details)
                         except Exception:
                             pass
 
-                    # Lock the channel: deny send for allowed roles & members
-                    # Deny send for everyone
                     try:
                         await ch.set_permissions(ch.guild.default_role, view_channel=True, send_messages=False)
                     except Exception:
                         pass
 
-                    # Deny send for allowed roles and members
                     for rid in details.get("allowed_role_ids", []) or []:
                         try:
                             role = ch.guild.get_role(rid)
@@ -1065,18 +1343,15 @@ class AutoResponder(commands.Cog):
                         except Exception:
                             pass
 
-                    # Rename channel to closed
                     try:
                         if ch.name.endswith("-open"):
                             await ch.edit(name=ch.name.replace("-open", "-closed"))
                         else:
-                            # ensure suffix
                             if "-closed" not in ch.name:
                                 await ch.edit(name=f"{ch.name}-closed")
                     except Exception:
                         pass
 
-                    # Build closed embed as requested
                     offenders_text = f"{details.get('investigated', 'Unknown')}" if details.get("investigated") else "Unknown"
                     claimers_ids = details.get("claimers", []) or []
                     claimers_mentions = []
@@ -1106,7 +1381,7 @@ class AutoResponder(commands.Cog):
                 # -reopen command
                 if content.startswith("-reopen"):
                     member = message.author
-                    if not any(r.id == IA_ROLE_ID for r in member.roles):
+                    if not any(r.id == IA_ROLE_ID for r in member.roles if isinstance(r, discord.Role)):
                         try:
                             await message.channel.send("You do not have permission to reopen this case.", delete_after=8)
                         except Exception:
@@ -1114,7 +1389,6 @@ class AutoResponder(commands.Cog):
                         return
 
                     ch = message.channel
-                    # fetch archive id
                     topic = ch.topic or ""
                     match = re.search(r"ia_archive:(\d+)", topic)
                     archive_id = int(match.group(1)) if match else None
@@ -1132,7 +1406,6 @@ class AutoResponder(commands.Cog):
                                 details = None
 
                     if not details:
-                        # try to search by channel id
                         archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
                         if archive_ch:
                             try:
@@ -1153,18 +1426,15 @@ class AutoResponder(commands.Cog):
                             pass
                         details = {"allowed_role_ids": [], "allowed_member_ids": []}
 
-                    # set status open
                     details["status"] = "open"
                     details["closed_by"] = None
                     details["closed_at"] = None
-                    # update archive
                     if archive_id and details:
                         try:
                             await edit_archive_message(archive_id, details)
                         except Exception:
                             pass
 
-                    # Restore send permissions for allowed roles/members
                     try:
                         await ch.set_permissions(ch.guild.default_role, view_channel=False, send_messages=False)
                     except Exception:
@@ -1184,7 +1454,6 @@ class AutoResponder(commands.Cog):
                         except Exception:
                             pass
 
-                    # Rename channel to open
                     try:
                         if ch.name.endswith("-closed"):
                             await ch.edit(name=ch.name.replace("-closed", "-open"))
@@ -1194,7 +1463,6 @@ class AutoResponder(commands.Cog):
                     except Exception:
                         pass
 
-                    # Announcement
                     try:
                         await ch.send(f"This case has been reopened by {member.mention}")
                     except Exception:
@@ -1202,11 +1470,9 @@ class AutoResponder(commands.Cog):
 
                     return
         except Exception:
-            # don't block other responders if IA logic errors
             pass
 
-        # Other message-based commands (existing auto responder behavior)
-        # Inactive, help, game, apply
+        # Other message-based commands handled similarly (inactive, game, apply, help, partnerinfo, partnership)
         if content.startswith("-inactive"):
             try:
                 await message.delete()
@@ -1272,7 +1538,6 @@ class AutoResponder(commands.Cog):
             except Exception:
                 pass
 
-        # Partnership message trigger via -partnerinfo (message command)
         if content == "-partnerinfo":
             try:
                 await message.delete()
@@ -1295,8 +1560,7 @@ class AutoResponder(commands.Cog):
             except Exception:
                 pass
 
-        # Partnership command via reply + -partnership
-        if message.reference and "-partnership" in content and any(role.id in STAFF_ROLES for role in message.author.roles):
+        if message.reference and "-partnership" in content and any(role.id in STAFF_ROLES for role in message.author.roles if isinstance(role, discord.Role)):
             try:
                 replied_msg = await message.channel.fetch_message(message.reference.message_id)
                 partner_channel = bot.get_channel(PARTNERSHIP_CHANNEL_ID)
@@ -1307,7 +1571,6 @@ class AutoResponder(commands.Cog):
                         pass
                     return
 
-                # Determine representative member in the guild
                 rep_member = None
                 try:
                     if isinstance(replied_msg.author, discord.Member):
@@ -1317,7 +1580,6 @@ class AutoResponder(commands.Cog):
                 except Exception:
                     rep_member = None
 
-                # Duplicate check: look for the representative's ID or mention in recent partnership messages
                 is_duplicate = False
                 try:
                     async for m in partner_channel.history(limit=500):
@@ -1342,14 +1604,11 @@ class AutoResponder(commands.Cog):
                     f"Representative: {replied_msg.author.mention}\n"
                     f"Content:\n{replied_msg.content}"
                 )
-
-                # Send ONLY the required plain text to partnership channel (no embeds, no titles, no extra text)
                 try:
                     await partner_channel.send(msg_content)
                 except Exception:
                     pass
 
-                # Assign partnership role to the representative (if possible)
                 try:
                     partner_role = message.guild.get_role(1392729143375822898)
                     if partner_role and rep_member:
@@ -1358,21 +1617,18 @@ class AutoResponder(commands.Cog):
                     pass
                 except Exception:
                     pass
-
-                # Intentionally silent on success
-            except Exception as e:
+            except Exception:
                 try:
-                    await message.channel.send(f"Error logging partnership: {e}", delete_after=10)
+                    await message.channel.send("Error logging partnership.", delete_after=10)
                 except Exception:
                     pass
 
-        # Command logging for message-based commands and '-' triggers (embed + Expand button backed by Discord storage for infractions/promotions only)
+        # Log message-based commands
         try:
             log_ch = bot.get_channel(LOGGING_CHANNEL_ID)
             if log_ch:
                 now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-                # Log slash-like messages (starting with '/')
                 if message.content.startswith("/"):
                     embed = discord.Embed(title="Command Used", color=discord.Color.blue())
                     embed.add_field(name="User", value=f"{message.author}", inline=True)
@@ -1380,7 +1636,6 @@ class AutoResponder(commands.Cog):
                     channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
                     embed.add_field(name="Channel", value=channel_info, inline=True)
                     embed.set_footer(text=f"At {now_str}")
-
                     details = {
                         "event_type": "message_command",
                         "user": f"{message.author} ({message.author.id})",
@@ -1396,10 +1651,8 @@ class AutoResponder(commands.Cog):
                         "timestamp": now_str,
                         "extra": None,
                     }
-                    # send embed (no archive for message_command since only infractions/promotions/ia_case are archived)
                     await send_embed_with_expand(log_ch, embed, details)
 
-                # Log message-trigger commands that start with '-' (e.g., -inactive, -partnerinfo, -apply, etc.)
                 if message.content.startswith("-"):
                     embed = discord.Embed(title="Message Command Used", color=discord.Color.blue())
                     embed.add_field(name="User", value=f"{message.author}", inline=True)
@@ -1407,7 +1660,6 @@ class AutoResponder(commands.Cog):
                     channel_info = getattr(message.channel, "mention", getattr(message.channel, "name", "Unknown"))
                     embed.add_field(name="Channel", value=channel_info, inline=True)
                     embed.set_footer(text=f"At {now_str}")
-
                     details = {
                         "event_type": "message_trigger",
                         "user": f"{message.author} ({message.author.id})",
@@ -1424,13 +1676,12 @@ class AutoResponder(commands.Cog):
                     }
                     await send_embed_with_expand(log_ch, embed, details)
         except Exception:
-            # keep logging failures silent
             pass
 
         await bot.process_commands(message)
 
 
-# ====== SERVER WARNINGS (reworked to use Expand + archive only for infractions/promotions) =======
+# ====== SERVER WARNINGS =======
 JOIN_THRESHOLD = 3
 JOIN_INTERVAL = 60  # seconds
 NEW_ACCOUNT_DAYS = 30
@@ -1441,8 +1692,8 @@ recent_joins = []
 async def on_member_join(member):
     now = datetime.now(timezone.utc)
     recent_joins.append((member.id, now))
+    recent_joins[:] = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
 
-    # New account detection
     try:
         account_age_days = (now - member.created_at.replace(tzinfo=timezone.utc)).days
     except Exception:
@@ -1470,10 +1721,8 @@ async def on_member_join(member):
                 "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
                 "extra": {"created_at": getattr(member, "created_at", None)},
             }
-            # This will post embed to BOD_ALERT_CHANNEL_ID but will NOT archive (event_type not infract/promote/ia_case)
             await send_embed_with_expand(channel, embed, details)
 
-    # Raid detection
     recent_joins_filtered = [j for j in recent_joins if (now - j[1]).total_seconds() <= JOIN_INTERVAL]
     if len(recent_joins_filtered) >= JOIN_THRESHOLD:
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
@@ -1503,7 +1752,6 @@ async def on_member_join(member):
 # ====== TICKET CHANNEL HANDLING & SERVER WARNING EVENTS =======
 @bot.event
 async def on_guild_channel_create(channel):
-    # When a new text channel is created under the ticket category, send the support welcome embed
     try:
         if isinstance(channel, discord.TextChannel) and channel.category_id == TICKET_CATEGORY_ID:
             welcome_text = (
@@ -1518,7 +1766,6 @@ async def on_guild_channel_create(channel):
                 pass
             return
 
-        # For other channel creations, notify server warnings (BOD_ALERT_CHANNEL_ID) with an embed (no archive)
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
@@ -1545,7 +1792,6 @@ async def on_guild_channel_create(channel):
             }
             await send_embed_with_expand(warn_ch, embed, details)
     except Exception:
-        # avoid crashing on unexpected errors
         pass
 
 
@@ -1590,7 +1836,7 @@ async def on_guild_channel_update(before, after):
             warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
             if warn_ch:
                 embed = discord.Embed(
-                    title="✏��� Channel Updated",
+                    title="✏️ Channel Updated",
                     description=f"Channel {getattr(after, 'mention', getattr(after, 'name', str(after)))} was updated.\n" + "\n".join(changed),
                     color=discord.Color.orange()
                 )
@@ -1715,13 +1961,11 @@ async def on_guild_role_update(before, after):
         pass
 
 
-# Log application (slash) command usage to moderation-logs and handle Claim buttons
+# Log application (slash) command usage and handle components (merged: tickets + IA expand/claim)
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
-        # If component interaction (button press)
         if interaction.type == discord.InteractionType.component:
-            # Safe-get custom_id
             cid = None
             try:
                 if isinstance(interaction.data, dict):
@@ -1729,16 +1973,379 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception:
                 cid = None
 
-            # IA Claim button handling
+            # Ticket create (support channel UI)
+            if cid and isinstance(cid, str) and cid.startswith("ticket_create:"):
+                tkey = cid.split(":", 1)[1]
+                await interaction.response.defer(ephemeral=True)
+                opener_member = interaction.user
+                chan, archive_id = await create_ticket_channel_for(opener_member, tkey, opener_member)
+                if chan:
+                    try:
+                        await interaction.followup.send(f"Ticket opened: {chan.mention}", ephemeral=True)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await interaction.followup.send("Failed to open ticket.", ephemeral=True)
+                    except Exception:
+                        pass
+                return
+
+            # Ticket claim button
+            if cid and isinstance(cid, str) and cid.startswith("ticket_claim:"):
+                try:
+                    channel_id = int(cid.split(":", 1)[1])
+                except Exception:
+                    channel_id = None
+                if channel_id != interaction.channel.id:
+                    await interaction.response.send_message("This button is not for this channel.", ephemeral=True)
+                    return
+
+                details = await find_ticket_archive_by_channel(interaction.channel)
+                if not details:
+                    await interaction.response.send_message("Ticket metadata not found.", ephemeral=True)
+                    return
+                archive_id = details.get("_archive_message_id")
+                claimers: List[int] = details.get("claimers", []) or []
+                user_id = interaction.user.id
+
+                if user_id == details.get("opener_id"):
+                    await interaction.response.send_message("You cannot claim your own ticket.", ephemeral=True)
+                    return
+
+                if len(claimers) == 0:
+                    claimers.append(user_id)
+                    details["claimers"] = claimers
+                    if archive_id:
+                        await edit_archive_message(archive_id, details)
+                    try:
+                        await interaction.channel.send(embed=discord.Embed(description=f"{interaction.user.mention} has claimed this ticket.", color=discord.Color.blue()))
+                    except Exception:
+                        pass
+                    await interaction.response.send_message("You claimed this ticket.", ephemeral=True)
+                    return
+
+                if user_id in claimers:
+                    claimers.remove(user_id)
+                    details["claimers"] = claimers
+                    if archive_id:
+                        await edit_archive_message(archive_id, details)
+                    try:
+                        await interaction.channel.send(embed=discord.Embed(description=f"{interaction.user.mention} has unclaimed this ticket.", color=discord.Color.orange()))
+                    except Exception:
+                        pass
+                    await interaction.response.send_message("You unclaimed this ticket.", ephemeral=True)
+                    return
+
+                first_claimer_id = claimers[0]
+                first_claimer = interaction.channel.guild.get_member(first_claimer_id) if interaction.channel.guild else None
+                if not first_claimer:
+                    claimers.append(user_id)
+                    details["claimers"] = claimers
+                    if archive_id:
+                        await edit_archive_message(archive_id, details)
+                    try:
+                        await interaction.channel.send(embed=discord.Embed(description=f"{interaction.user.mention} has been added as a claimer (no approver available).", color=discord.Color.blue()))
+                    except Exception:
+                        pass
+                    await interaction.response.send_message("You claimed this ticket.", ephemeral=True)
+                    return
+
+                approval_view = discord.ui.View(timeout=1800)
+                new_claimer_id = user_id
+                approve_id = f"ticket_approve:{archive_id}:{new_claimer_id}"
+                deny_id = f"ticket_deny:{archive_id}:{new_claimer_id}"
+                approval_view.add_item(discord.ui.Button(style=discord.ButtonStyle.success, label="Approve", custom_id=approve_id))
+                approval_view.add_item(discord.ui.Button(style=discord.ButtonStyle.danger, label="Deny", custom_id=deny_id))
+                try:
+                    await interaction.channel.send(content=f"{first_claimer.mention}, {interaction.user.mention} requests to claim this ticket. Allow?", view=approval_view)
+                except Exception:
+                    pass
+                await interaction.response.send_message("Requested permission from the original claimer. They must approve to add you.", ephemeral=True)
+                return
+
+            # Approve / Deny claim
+            if cid and isinstance(cid, str) and (cid.startswith("ticket_approve:") or cid.startswith("ticket_deny:")):
+                parts = cid.split(":")
+                action = parts[0]
+                try:
+                    archive_id = int(parts[1])
+                    new_claimer_id = int(parts[2])
+                except Exception:
+                    archive_id = None
+                    new_claimer_id = None
+
+                arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                archive_msg = None
+                details = None
+                if archive_id and arch_ch:
+                    try:
+                        archive_msg = await arch_ch.fetch_message(archive_id)
+                        details = _extract_json_from_codeblock(archive_msg.content or "")
+                    except Exception:
+                        details = None
+
+                if not details and isinstance(interaction.channel, discord.TextChannel):
+                    details = await find_ticket_archive_by_channel(interaction.channel)
+
+                if not details:
+                    await interaction.response.send_message("Ticket archive not found.", ephemeral=True)
+                    return
+
+                claimers = details.get("claimers", []) or []
+                if not claimers:
+                    await interaction.response.send_message("No claimer to approve request.", ephemeral=True)
+                    return
+
+                first_claimer = claimers[0]
+                if interaction.user.id != first_claimer:
+                    await interaction.response.send_message("Only the original claimer can approve or deny this request.", ephemeral=True)
+                    return
+
+                if action == "ticket_approve":
+                    if new_claimer_id not in claimers:
+                        claimers.append(new_claimer_id)
+                        details["claimers"] = claimers
+                        if archive_id:
+                            await edit_archive_message(archive_id, details)
+                        try:
+                            await interaction.channel.send(embed=discord.Embed(description=f"<@{new_claimer_id}> has been approved to claim this ticket by {interaction.user.mention}.", color=discord.Color.green()))
+                        except Exception:
+                            pass
+                    await interaction.response.send_message("Approved.", ephemeral=True)
+                    return
+                else:
+                    try:
+                        await interaction.channel.send(embed=discord.Embed(description=f"{interaction.user.mention} denied the claim request for <@{new_claimer_id}>.", color=discord.Color.red()))
+                    except Exception:
+                        pass
+                    await interaction.response.send_message("Denied.", ephemeral=True)
+                    return
+
+            # Ticket close flow
+            if cid and isinstance(cid, str) and cid.startswith("ticket_close:"):
+                try:
+                    channel_id = int(cid.split(":", 1)[1])
+                except Exception:
+                    channel_id = None
+                if channel_id != interaction.channel.id:
+                    await interaction.response.send_message("This button is not for this channel.", ephemeral=True)
+                    return
+
+                details = await find_ticket_archive_by_channel(interaction.channel)
+                if not details:
+                    await interaction.response.send_message("Ticket metadata not found.", ephemeral=True)
+                    return
+                archive_id = details.get("_archive_message_id")
+                claimers = details.get("claimers", []) or []
+                requester_id = interaction.user.id
+
+                allowed_role_id = TICKET_TYPES[details.get("ticket_type")]["owner_role_id"]
+                has_owner_role = any(r.id == allowed_role_id for r in interaction.user.roles)
+
+                if has_owner_role:
+                    modal = CloseReasonModal(archive_id=archive_id, requester_id=requester_id, channel_id=interaction.channel.id)
+                    try:
+                        await interaction.response.send_modal(modal)
+                    except Exception:
+                        await interaction.response.send_message("Failed to show close modal.", ephemeral=True)
+                    return
+
+                if len(claimers) == 0:
+                    modal = CloseReasonModal(archive_id=archive_id, requester_id=requester_id, channel_id=interaction.channel.id)
+                    try:
+                        await interaction.response.send_modal(modal)
+                    except Exception:
+                        await interaction.response.send_message("Failed to show close modal.", ephemeral=True)
+                    return
+
+                first_claimer_id = claimers[0]
+                if requester_id == first_claimer_id:
+                    modal = CloseReasonModal(archive_id=archive_id, requester_id=requester_id, channel_id=interaction.channel.id)
+                    try:
+                        await interaction.response.send_modal(modal)
+                    except Exception:
+                        await interaction.response.send_message("Failed to show close modal.", ephemeral=True)
+                    return
+
+                class ApprovalRequestModal(discord.ui.Modal, title="Request Close — Reason"):
+                    reason = discord.ui.TextInput(label="Reason for closing", style=discord.TextStyle.long, required=False, max_length=1000)
+
+                    def __init__(self, archive_id: Optional[int], requester_id: int, first_claimer_id: int, channel_id: int):
+                        super().__init__()
+                        self.archive_id = archive_id
+                        self.requester_id = requester_id
+                        self.first_claimer_id = first_claimer_id
+                        self.channel_id = channel_id
+
+                    async def on_submit(self, modal_interaction: discord.Interaction):
+                        reason_value = self.reason.value.strip() if self.reason.value else "No reason provided"
+                        chan = modal_interaction.client.get_channel(self.channel_id)
+                        if not isinstance(chan, discord.TextChannel):
+                            try:
+                                await modal_interaction.response.send_message("Ticket channel not found.", ephemeral=True)
+                            except Exception:
+                                pass
+                            return
+
+                        details_local = await find_ticket_archive_by_channel(chan)
+                        archive_local_id = details_local.get("_archive_message_id") if details_local else self.archive_id
+
+                        approver_id = self.first_claimer_id
+                        approver_member = chan.guild.get_member(approver_id) if chan.guild else None
+                        if not approver_member:
+                            await modal_interaction.response.send_message("Approver (original claimer) not found — cannot request approval.", ephemeral=True)
+                            return
+
+                        pending = {
+                            "requester_id": self.requester_id,
+                            "reason": reason_value,
+                            "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        }
+                        try:
+                            arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                            if arch_ch and archive_local_id:
+                                msg = await arch_ch.fetch_message(archive_local_id)
+                                parsed = _extract_json_from_codeblock(msg.content or "")
+                                if parsed:
+                                    parsed["pending_close_request"] = pending
+                                    await edit_archive_message(archive_local_id, parsed)
+                        except Exception:
+                            pass
+
+                        view = discord.ui.View(timeout=1800)
+                        approve_id = f"ticket_close_approve:{archive_local_id}:{self.requester_id}"
+                        deny_id = f"ticket_close_deny:{archive_local_id}:{self.requester_id}"
+                        view.add_item(discord.ui.Button(style=discord.ButtonStyle.success, label="Approve", custom_id=approve_id))
+                        view.add_item(discord.ui.Button(style=discord.ButtonStyle.danger, label="Deny", custom_id=deny_id))
+                        try:
+                            await chan.send(content=f"{approver_member.mention}, {modal_interaction.user.mention} has requested to close this ticket. Reason: {reason_value}\nOnly you may Approve or Deny.", view=view)
+                        except Exception:
+                            pass
+
+                        try:
+                            await modal_interaction.response.send_message("Close request sent to the claimer(s). They must approve to close.", ephemeral=True)
+                        except Exception:
+                            pass
+
+                modal2 = ApprovalRequestModal(archive_id=archive_id, requester_id=requester_id, first_claimer_id=first_claimer_id, channel_id=interaction.channel.id)
+                try:
+                    await interaction.response.send_modal(modal2)
+                except Exception:
+                    await interaction.response.send_message("Failed to open approval modal.", ephemeral=True)
+                return
+
+            # Handle approve/deny close actions
+            if cid and isinstance(cid, str) and (cid.startswith("ticket_close_approve:") or cid.startswith("ticket_close_deny:")):
+                parts = cid.split(":")
+                action = parts[0]
+                try:
+                    archive_id = int(parts[1])
+                    requester_id = int(parts[2])
+                except Exception:
+                    archive_id = None
+                    requester_id = None
+
+                arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                details_local = None
+                if archive_id and arch_ch:
+                    try:
+                        msg = await arch_ch.fetch_message(archive_id)
+                        details_local = _extract_json_from_codeblock(msg.content or "")
+                    except Exception:
+                        details_local = None
+                if not details_local and isinstance(interaction.channel, discord.TextChannel):
+                    details_local = await find_ticket_archive_by_channel(interaction.channel)
+
+                if not details_local:
+                    await interaction.response.send_message("Ticket archive not found.", ephemeral=True)
+                    return
+
+                claimers = details_local.get("claimers", []) or []
+                if not claimers:
+                    await interaction.response.send_message("No claimer available to approve.", ephemeral=True)
+                    return
+
+                first_claimer_id = claimers[0]
+                if interaction.user.id != first_claimer_id:
+                    await interaction.response.send_message("Only the original claimer can approve or deny close requests.", ephemeral=True)
+                    return
+
+                pending = details_local.get("pending_close_request")
+                if not pending:
+                    await interaction.response.send_message("No pending close request found.", ephemeral=True)
+                    return
+
+                if action == "ticket_close_approve":
+                    reason_value = pending.get("reason", "No reason provided")
+                    requester_member = interaction.channel.guild.get_member(requester_id) or None
+                    details_local["status"] = "closed"
+                    details_local["close_reason"] = reason_value
+                    details_local["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    details_local["closed_by"] = f"{requester_member} ({requester_id})" if requester_member else f"{requester_id}"
+                    details_local.pop("pending_close_request", None)
+                    if archive_id:
+                        await edit_archive_message(archive_id, details_local)
+                    try:
+                        ch = interaction.channel
+                        await ch.set_permissions(ch.guild.default_role, view_channel=True, send_messages=False)
+                        owner_role = ch.guild.get_role(TICKET_TYPES.get(details_local.get("ticket_type"), {}).get("owner_role_id"))
+                        if owner_role:
+                            await ch.set_permissions(owner_role, view_channel=True, send_messages=False)
+                        for rid in STAFF_ROLES:
+                            r = ch.guild.get_role(rid)
+                            if r:
+                                await ch.set_permissions(r, view_channel=True, send_messages=False)
+                        if ch.name.endswith("-open"):
+                            await ch.edit(name=ch.name.replace("-open", "-closed"))
+                        else:
+                            if not ch.name.endswith("-closed"):
+                                await ch.edit(name=f"{ch.name}-closed")
+                    except Exception:
+                        pass
+
+                    try:
+                        logs_ch = await ensure_channel(TICKET_LOGS_CHANNEL_ID)
+                        if logs_ch:
+                            embed = discord.Embed(title=f"Ticket Closed — {interaction.channel.name}", color=discord.Color.red())
+                            embed.add_field(name="Ticket", value=interaction.channel.mention, inline=False)
+                            embed.add_field(name="Type", value=details_local.get("ticket_type", "N/A"), inline=True)
+                            embed.add_field(name="Opened By", value=details_local.get("opener", "N/A"), inline=True)
+                            embed.add_field(name="Closed At", value=details_local.get("closed_at", "N/A"), inline=True)
+                            embed.add_field(name="Closed By", value=details_local.get("closed_by", "N/A"), inline=True)
+                            claimers_text = ", ".join([f"<@{c}>" for c in details_local.get("claimers", [])]) or "None"
+                            embed.add_field(name="Claimers", value=claimers_text, inline=False)
+                            embed.add_field(name="Close Reason", value=details_local.get("close_reason", "No reason provided"), inline=False)
+                            await logs_ch.send(embed=embed)
+                    except Exception:
+                        pass
+
+                    try:
+                        await interaction.response.send_message("Approved and ticket closed.", ephemeral=True)
+                    except Exception:
+                        pass
+                    return
+                else:
+                    details_local.pop("pending_close_request", None)
+                    if archive_id:
+                        await edit_archive_message(archive_id, details_local)
+                    try:
+                        await interaction.channel.send(embed=discord.Embed(description=f"{interaction.user.mention} denied the close request.", color=discord.Color.orange()))
+                    except Exception:
+                        pass
+                    try:
+                        await interaction.response.send_message("Denied the close request.", ephemeral=True)
+                    except Exception:
+                        pass
+                    return
+
+            # IA claim button handling (from infractions file)
             if cid and isinstance(cid, str) and cid.startswith("ia_claim:"):
-                # Custom id format: ia_claim:{channel_id} or ia_claim:{archive_id}
-                # We'll pull archive id from the current channel's topic to locate the archive message
                 try:
                     chan = interaction.channel
                     if not isinstance(chan, discord.TextChannel):
                         await interaction.response.send_message("Claim can only be used inside case channels.", ephemeral=True)
                         return
-                    # find archive id in topic
                     topic = chan.topic or ""
                     match = re.search(r"ia_archive:(\d+)", topic)
                     archive_id = int(match.group(1)) if match else None
@@ -1754,7 +2361,6 @@ async def on_interaction(interaction: discord.Interaction):
                                 archive_msg = None
                                 details = None
 
-                    # fallback: search for archive by channel id
                     if not details:
                         archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
                         if archive_ch:
@@ -1778,14 +2384,12 @@ async def on_interaction(interaction: discord.Interaction):
                     if user_id not in claimers:
                         claimers.append(user_id)
                         details["claimers"] = claimers
-                        # update archive message
                         if archive_id:
                             try:
                                 await edit_archive_message(archive_id, details)
                             except Exception:
                                 pass
 
-                    # Announce claim in the case channel
                     try:
                         ann_embed = discord.Embed(description=f"{interaction.user.mention} has claimed this case.", color=discord.Color.blue())
                         await chan.send(embed=ann_embed)
@@ -1800,9 +2404,8 @@ async def on_interaction(interaction: discord.Interaction):
                         pass
                 return
 
-            # Expand button handling (existing)
+            # Expand button handling (common)
             if cid and isinstance(cid, str) and cid.startswith("expand:"):
-                # parse archive id
                 try:
                     archive_id_str = cid.split(":", 1)[1]
                     archive_id = int(archive_id_str)
@@ -1816,7 +2419,6 @@ async def on_interaction(interaction: discord.Interaction):
                         pass
                     return
 
-                # fetch archive message from mod-archive channel
                 try:
                     archive_ch = bot.get_channel(MOD_ARCHIVE_CHANNEL_ID)
                     if not archive_ch:
@@ -1843,17 +2445,14 @@ async def on_interaction(interaction: discord.Interaction):
                         pass
                     return
 
-                # Parse JSON from archive message content if present
                 details = None
                 try:
                     content = archive_msg.content or ""
-                    # strip triple backticks if present
                     parsed = _extract_json_from_codeblock(content)
                     details = parsed
                 except Exception:
                     details = None
 
-                # If parsing failed and embed exists, try to extract from embed fields
                 if details is None and archive_msg.embeds:
                     try:
                         e = archive_msg.embeds[0]
@@ -1865,7 +2464,6 @@ async def on_interaction(interaction: discord.Interaction):
                     except Exception:
                         details = None
 
-                # Fallback: show raw content
                 if details is None:
                     try:
                         raw_text = archive_msg.content or "No further details available."
@@ -1880,14 +2478,12 @@ async def on_interaction(interaction: discord.Interaction):
                             pass
                     return
 
-                # Build an embed with as many fields as possible from details dict
                 try:
                     detail_embed = discord.Embed(title="Detailed Log Information", color=discord.Color.dark_blue())
                     ts = details.get("timestamp")
                     if ts:
                         detail_embed.set_footer(text=f"Logged at {ts}")
 
-                    # iterate through known keys in a helpful order
                     keys_order = ["event_type", "user", "user_id", "command", "code", "content", "punishment", "issued_by", "expires", "channel", "channel_id", "guild", "guild_id", "message_id", "infraction_message_id", "attachments", "extra"]
                     for key in keys_order:
                         if key in details and details.get(key) not in (None, "", []):
@@ -1899,7 +2495,6 @@ async def on_interaction(interaction: discord.Interaction):
                                 text = text[:1020] + "..."
                             detail_embed.add_field(name=key.replace("_", " ").title(), value=text, inline=False)
 
-                    # Add any remaining keys
                     for k, v in details.items():
                         if k in keys_order:
                             continue
@@ -1917,9 +2512,9 @@ async def on_interaction(interaction: discord.Interaction):
                     except Exception:
                         pass
 
-                return  # handled the component interaction
+                return
 
-        # If not a component interaction, handle application command logging as before
+        # Slash command logging
         if interaction.type == discord.InteractionType.application_command:
             cmd_name = ""
             try:
@@ -1962,8 +2557,8 @@ async def on_interaction(interaction: discord.Interaction):
             except Exception:
                 pass
     except Exception:
-        # keep failure silent
-        pass
+        # Keep top-level failures silent but logged
+        logger.exception("on_interaction error")
 
 
 # ====== BOT EVENTS =======
@@ -1974,29 +2569,30 @@ startup_import_task = None
 async def on_ready():
     logger.info(f"Logged in as {bot.user}")
 
-    # add cogs safely (await if needed)
     try:
-        res = bot.add_cog(StaffCommands(bot))
-        if inspect.isawaitable(res):
-            await res
+        if not bot.get_cog("StaffCommands"):
+            res = bot.add_cog(StaffCommands(bot))
+            if inspect.isawaitable(res):
+                await res
     except Exception:
         pass
 
     try:
-        res = bot.add_cog(PublicCommands(bot))
-        if inspect.isawaitable(res):
-            await res
+        if not bot.get_cog("PublicCommands"):
+            res = bot.add_cog(PublicCommands(bot))
+            if inspect.isawaitable(res):
+                await res
     except Exception:
         pass
 
     try:
-        res = bot.add_cog(AutoResponder(bot))
-        if inspect.isawaitable(res):
-            await res
+        if not bot.get_cog("AutoResponder"):
+            res = bot.add_cog(AutoResponder(bot))
+            if inspect.isawaitable(res):
+                await res
     except Exception:
         pass
 
-    # add command groups if not present
     try:
         existing = [c.name for c in bot.tree.walk_commands()]
         if "infraction" not in existing:
@@ -2008,17 +2604,13 @@ async def on_ready():
     except Exception:
         pass
 
-    # Ensure commands are only synced once per bot session
     if not getattr(bot, "app_commands_synced", False):
         try:
             guild_obj = discord.Object(id=MAIN_GUILD_ID)
-            # copy globals to guild (so slash commands appear instantly)
             try:
                 bot.tree.copy_global_to(guild=guild_obj)
             except Exception:
-                # ignore if not supported in environment
                 pass
-            # sync and await properly
             sync_res = bot.tree.sync(guild=guild_obj)
             if inspect.isawaitable(sync_res):
                 await sync_res
@@ -2027,17 +2619,25 @@ async def on_ready():
         except Exception:
             logger.exception("Failed to sync slash commands")
 
-    # Run a safe, limited startup import of old infractions (non-blocking)
+    # Ensure ticket UI exists
+    try:
+        await ensure_ticket_ui_messages()
+    except Exception:
+        logger.exception("Failed to ensure ticket UI messages")
+
     global startup_import_task
     if startup_import_task is None:
         async def _startup_import():
             try:
                 logger.info("Starting limited startup infraction import (safe).")
-                res = await scan_and_archive_infractions(limit=300)
-                if res.get("available"):
-                    logger.info(f"Startup import finished: {res}")
-                else:
-                    logger.info("Startup import skipped: channels not available.")
+                try:
+                    res = await scan_and_archive_infractions(limit=300)
+                    if res.get("available"):
+                        logger.info(f"Startup import finished: {res}")
+                    else:
+                        logger.info("Startup import skipped: channels not available.")
+                except Exception:
+                    pass
             except Exception:
                 logger.exception("Startup import failed.")
 
@@ -2051,7 +2651,6 @@ async def on_guild_join(guild):
         try:
             await owner.send(f"I was added to a new server: {guild.name} (ID: {guild.id})")
         except Exception:
-            # owner DMs blocked or failed
             pass
     except Exception:
         pass
