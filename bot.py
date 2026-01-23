@@ -13,9 +13,15 @@ import re
 import inspect
 
 # ====== CONFIG =======
+# Get token from environment or hardcode for testing
 TOKEN = os.environ.get("DISCORD_TOKEN")
+# For testing, you can temporarily hardcode: TOKEN = "your_token_here"
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN environment variable is not set")
+    print("ERROR: DISCORD_TOKEN environment variable is not set")
+    print("Please set it or temporarily hardcode it in the file")
+    # Uncomment the line below and add your token for testing
+    # TOKEN = "your_bot_token_here"
+    # raise RuntimeError("DISCORD_TOKEN environment variable is not set")
 
 MAIN_GUILD_ID = 1371272556820041849
 
@@ -856,22 +862,41 @@ async def on_ready():
 
     # Register app command groups (only once)
     try:
-        # instantiate groups and add to tree if not already present
-        groups = [InfractionGroup(), PromotionGroup(), IAGroup()]
-        for grp in groups:
+        # Check if groups are already registered to avoid conflicts
+        existing_commands = [cmd.name for cmd in bot.tree.get_commands()]
+        
+        groups_to_add = []
+        if "infraction" not in existing_commands:
+            groups_to_add.append(InfractionGroup())
+        if "promotion" not in existing_commands:
+            groups_to_add.append(PromotionGroup())
+        if "ia" not in existing_commands:
+            groups_to_add.append(IAGroup())
+        
+        for grp in groups_to_add:
             try:
                 bot.tree.add_command(grp)
-            except Exception:
-                # already added or other issue; log and continue
-                logger.debug(f"Group {grp.name} may already be registered")
-        # Sync to guild for faster registration during development (optional)
+                logger.info(f"Added command group: {grp.name}")
+            except Exception as e:
+                logger.error(f"Failed to add group {grp.name}: {e}")
+        
+        # Sync to guild for faster registration during development
         try:
-            # For immediate testing in a single guild, uncomment the guild sync line and set MAIN_GUILD_ID
-            # await bot.tree.sync(guild=discord.Object(id=MAIN_GUILD_ID))
-            await bot.tree.sync()
-            logger.info("App commands synced")
-        except Exception:
-            logger.exception("Failed to sync app commands")
+            # Use guild sync for immediate testing (faster than global sync)
+            guild = discord.Object(id=MAIN_GUILD_ID)
+            await bot.tree.sync(guild=guild)
+            logger.info(f"App commands synced to guild {MAIN_GUILD_ID}")
+            
+            # Also try global sync as backup
+            try:
+                await bot.tree.sync()
+                logger.info("App commands synced globally")
+            except Exception as e:
+                logger.warning(f"Global sync failed: {e}")
+                
+        except Exception as e:
+            logger.error(f"Failed to sync app commands: {e}")
+            logger.exception("Full sync error details:")
     except Exception:
         logger.exception("Failed to register app command groups")
 
@@ -888,26 +913,75 @@ async def on_ready():
 # ------------------------
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    # Provide minimal feedback for check failures
+    # Provide detailed feedback for debugging
+    error_msg = str(error)
+    logger.error(f"App command error: {error_msg}")
+    logger.exception(f"Full error details: {error}")
+    
     if isinstance(error, app_commands.CheckFailure):
         try:
-            await interaction.response.send_message(str(error), ephemeral=True)
-        except Exception:
-            logger.exception("Failed to send check failure message")
-    else:
-        logger.exception("Unhandled app command error")
+            if interaction.response.is_done():
+                await interaction.followup.send(error_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_msg, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to send check failure message: {e}")
+    elif isinstance(error, app_commands.CommandInvokeError):
         try:
-            await interaction.response.send_message("An error occurred while processing the command.", ephemeral=True)
-        except Exception:
-            logger.exception("Failed to send generic error message")
+            if interaction.response.is_done():
+                await interaction.followup.send("Command execution failed. Check bot logs.", ephemeral=True)
+            else:
+                await interaction.response.send_message("Command execution failed. Check bot logs.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to send invoke error message: {e}")
+    else:
+        logger.error(f"Unhandled app command error type: {type(error)}")
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("An unexpected error occurred.", ephemeral=True)
+            else:
+                await interaction.response.send_message("An unexpected error occurred.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to send generic error message: {e}")
 
 
 # ------------------------
-# Optional: simple ping command for sanity
+# Debug commands for testing
 # ------------------------
 @bot.command(name="ping")
 async def ping_cmd(ctx: commands.Context):
-    await ctx.send("Pong!")
+    await ctx.send(f"Pong! Bot is online. Latency: {round(bot.latency * 1000)}ms")
+
+@bot.command(name="sync")
+@commands.has_permissions(administrator=True)
+async def sync_commands(ctx: commands.Context):
+    """Manually sync commands - for debugging"""
+    try:
+        await bot.tree.sync()
+        await ctx.send("Commands synced globally!")
+    except Exception as e:
+        await ctx.send(f"Sync failed: {e}")
+
+@bot.command(name="guildsync")
+@commands.has_permissions(administrator=True)
+async def guild_sync_commands(ctx: commands.Context):
+    """Sync commands to current guild - for debugging"""
+    try:
+        await bot.tree.sync(guild=ctx.guild)
+        await ctx.send(f"Commands synced to guild {ctx.guild.name}!")
+    except Exception as e:
+        await ctx.send(f"Guild sync failed: {e}")
+
+@bot.command(name="debug")
+@commands.has_permissions(administrator=True)
+async def debug_info(ctx: commands.Context):
+    """Show debug information"""
+    commands_list = [cmd.name for cmd in bot.tree.get_commands()]
+    embed = discord.Embed(title="Bot Debug Info", color=discord.Color.blue())
+    embed.add_field(name="Registered Commands", value="\n".join(commands_list) or "None", inline=False)
+    embed.add_field(name="Bot Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    embed.add_field(name="Guild Count", value=str(len(bot.guilds)), inline=True)
+    await ctx.send(embed=embed)
 
 
 # ------------------------
