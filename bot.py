@@ -11,6 +11,9 @@ import json
 import re
 import inspect
 
+# Compatibility: Check if ButtonStyle.success exists, otherwise use primary
+SUCCESS_BUTTON_STYLE = getattr(discord.ButtonStyle, "success", discord.ButtonStyle.primary)
+
 # ====== CONFIG =======
 TOKEN = os.environ.get("DISCORD_TOKEN")
 if not TOKEN:
@@ -493,7 +496,7 @@ async def _save_antiping_entry(parsed: Dict[str, Any]) -> Optional[int]:
 TICKET_TYPES = {
     "partnership": {
         "title": "Partnership Ticket",
-        "description": "Click on the button below to open a Partnership ticket!",
+        "description": "Click on the button below to open an Partnership ticket!",
         "role_ping": PARTNERSHIP_ROLE_ID,
         "owner_role_id": PARTNERSHIP_ROLE_ID,
     },
@@ -588,7 +591,7 @@ async def create_ticket_channel_for(user: discord.Member, ticket_type: str, open
         return None, None
 
     sanitized = sanitize_channel_name(user.display_name or user.name)
-    channel_name = f"{ticket_type}-{sanitized}"
+    channel_name = f"{sanitized}-{ticket_type}"
 
     category = discord.utils.get(guild.categories, id=TICKET_CATEGORY_ID)
     overwrites: Dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
@@ -620,14 +623,8 @@ async def create_ticket_channel_for(user: discord.Member, ticket_type: str, open
 
     conf = TICKET_TYPES[ticket_type]
     role_ping = conf.get("role_ping")
-    ping_text = f"<@&{role_ping}>" if role_ping else ""
-    try:
-        if ping_text:
-            await chan.send(content=ping_text)
-    except Exception:
-        pass
-
-    initial_embed = discord.Embed(title=conf["title"], description="Hello! Thank you for contacting the Iowa State Roleplay Support Team.\nPlease state the reason for opening the ticket, and a support member will respond when they're available!", color=discord.Color.green())
+    role_ping_text = f"<@&{role_ping}>" if role_ping else ""
+    initial_embed = discord.Embed(title=conf["title"], description=f"{role_ping_text}\n\nHello! Thank you for contacting the Iowa State Roleplay Support Team. Please state the reason for opening the ticket, and a support member will respond when they're available!", color=discord.Color.green())
     initial_embed.set_image(url=SUPPORT_EMBED_BANNER)
     view = discord.ui.View()
     claim_btn = discord.ui.Button(label="Claim", style=discord.ButtonStyle.secondary, custom_id=f"ticket_claim:{chan.id}")
@@ -760,7 +757,8 @@ class AntiPingModal(discord.ui.Modal, title="Anti-Ping — Duration (optional)")
         custom_prefix = f"antiping:{aid}:{requester_id}"
         view.add_item(discord.ui.Button(label="Pause", style=discord.ButtonStyle.secondary, custom_id=custom_prefix + ":pause"))
         view.add_item(discord.ui.Button(label="Stop", style=discord.ButtonStyle.danger, custom_id=custom_prefix + ":stop"))
-        view.add_item(discord.ui.Button(label="Start/Resume", style=discord.ButtonStyle.success, custom_id=custom_prefix + ":start"))
+        # Use success style (with fallback for compatibility)
+        view.add_item(discord.ui.Button(label="Start/Resume", style=SUCCESS_BUTTON_STYLE, custom_id=custom_prefix + ":start"))
 
         try:
             await interaction.followup.send(embed=panel_embed, view=view, ephemeral=True)
@@ -885,20 +883,93 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket Reason"):
         except Exception:
             pass
 
+        # Generate comprehensive summary
         try:
-            await interaction.response.send_message("Ticket closed. Channel will be deleted in 14 days.", ephemeral=True)
+            logs_ch = await ensure_channel(TICKET_LOGS_CHANNEL_ID)
+            if logs_ch:
+                # Create comprehensive summary embed
+                summary_embed = discord.Embed(
+                    title=f"📋 Ticket Summary — {details.get('ticket_type', 'Unknown').upper()}",
+                    color=discord.Color.blue()
+                )
+                
+                # Basic Info
+                summary_embed.add_field(name="Ticket Type", value=details.get("ticket_type", "N/A").title(), inline=True)
+                summary_embed.add_field(name="Channel", value=f"{chan.name} ({chan.id})", inline=True)
+                summary_embed.add_field(name="Status", value="Closed", inline=True)
+                
+                # Opener Info
+                summary_embed.add_field(name="Opened By", value=details.get("opener", "N/A"), inline=True)
+                summary_embed.add_field(name="Opened At", value=details.get("created_at", "N/A"), inline=True)
+                
+                # Closer Info
+                summary_embed.add_field(name="Closed By", value=details.get("closed_by", "N/A"), inline=True)
+                summary_embed.add_field(name="Closed At", value=details.get("closed_at", "N/A"), inline=True)
+                summary_embed.add_field(name="Close Reason", value=details.get("close_reason", "No reason provided"), inline=False)
+                
+                # Claimers
+                claimers = details.get("claimers", []) or []
+                main_claimer = details.get("main_claimer")
+                if claimers:
+                    claimer_mentions = []
+                    for cid in claimers:
+                        try:
+                            member = chan.guild.get_member(cid)
+                            if member:
+                                claimer_mentions.append(f"{member.mention} ({'Main' if cid == main_claimer else 'Secondary'})")
+                            else:
+                                claimer_mentions.append(f"<@{cid}> ({'Main' if cid == main_claimer else 'Secondary'})")
+                        except Exception:
+                            claimer_mentions.append(f"<@{cid}> ({'Main' if cid == main_claimer else 'Secondary'})")
+                    summary_embed.add_field(name="Claimers", value="\n".join(claimer_mentions) if claimer_mentions else "None", inline=False)
+                else:
+                    summary_embed.add_field(name="Claimers", value="None", inline=False)
+                
+                # Message Count
+                try:
+                    msg_count = len([m async for m in chan.history(limit=None)])
+                    summary_embed.add_field(name="Total Messages", value=str(msg_count), inline=True)
+                except Exception:
+                    summary_embed.add_field(name="Total Messages", value="Unknown", inline=True)
+                
+                # Duration
+                try:
+                    opened_dt = datetime.fromisoformat(details.get("created_at", "").replace(" UTC", "+00:00"))
+                    closed_dt = datetime.fromisoformat(details.get("closed_at", "").replace(" UTC", "+00:00"))
+                    duration = closed_dt - opened_dt
+                    hours = int(duration.total_seconds() / 3600)
+                    minutes = int((duration.total_seconds() % 3600) / 60)
+                    summary_embed.add_field(name="Duration", value=f"{hours}h {minutes}m", inline=True)
+                except Exception:
+                    summary_embed.add_field(name="Duration", value="Unknown", inline=True)
+                
+                # Inactivity Info
+                inactivity_pinged = details.get("inactivity_pinged_at")
+                if inactivity_pinged:
+                    summary_embed.add_field(name="Inactivity Warning", value=f"Sent at {inactivity_pinged}", inline=False)
+                
+                # Archive reference
+                if archive_id:
+                    summary_embed.add_field(name="Archive ID", value=str(archive_id), inline=True)
+                    summary_embed.add_field(name="Full History", value=f"Complete message history saved to archive", inline=False)
+                
+                summary_embed.set_footer(text=f"Ticket ID: {archive_id or 'N/A'}")
+                
+                await logs_ch.send(embed=summary_embed)
+        except Exception:
+            logger.exception("Failed to send ticket summary to logs")
+
+        try:
+            await interaction.response.send_message("Ticket closed. Channel will be deleted.", ephemeral=True)
         except Exception:
             pass
 
-        # Schedule deletion after 14 days
-        async def delete_after_14_days():
-            await asyncio.sleep(14 * 24 * 60 * 60)  # 14 days in seconds
-            try:
-                await chan.delete(reason="Ticket closed - 14 day retention expired")
-            except Exception:
-                logger.exception(f"Failed to delete ticket channel {chan.id} after 14 days")
-        
-        asyncio.create_task(delete_after_14_days())
+        # Delete channel immediately after closing
+        try:
+            await asyncio.sleep(2)  # Small delay to ensure message is sent
+            await chan.delete(reason="Ticket closed")
+        except Exception:
+            logger.exception(f"Failed to delete ticket channel {chan.id}")
 
 class ClaimApprovalView(discord.ui.View):
     """View for main claimer to approve additional claimers"""
@@ -908,7 +979,7 @@ class ClaimApprovalView(discord.ui.View):
         self.channel_id = channel_id
         self.archive_id = archive_id
     
-    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Approve", style=SUCCESS_BUTTON_STYLE)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Load ticket details
         details = None
@@ -957,6 +1028,85 @@ class ClaimApprovalView(discord.ui.View):
         except Exception:
             pass
 
+class CloseApprovalView(discord.ui.View):
+    """View for main claimer to approve closing ticket"""
+    def __init__(self, requester_id: int, channel_id: int, archive_id: Optional[int], main_claimer_id: int):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.requester_id = requester_id
+        self.channel_id = channel_id
+        self.archive_id = archive_id
+        self.main_claimer_id = main_claimer_id
+    
+    @discord.ui.button(label="Yes", style=SUCCESS_BUTTON_STYLE)
+    async def approve_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only main claimer can approve
+        if interaction.user.id != self.main_claimer_id:
+            try:
+                await interaction.response.send_message("Only the main claimer can approve this request.", ephemeral=True)
+            except Exception:
+                pass
+            return
+        
+        try:
+            await interaction.response.send_message(f"Close request from <@{self.requester_id}> approved. They can now close the ticket.", ephemeral=False)
+        except Exception:
+            pass
+        
+        # Store approval in archive so requester can close
+        if self.archive_id:
+            arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+            if arch_ch:
+                try:
+                    am = await arch_ch.fetch_message(self.archive_id)
+                    details = _extract_json_from_codeblock(am.content or "")
+                    if details:
+                        approved_closers = details.get("approved_closers", []) or []
+                        if self.requester_id not in approved_closers:
+                            approved_closers.append(self.requester_id)
+                            details["approved_closers"] = approved_closers
+                            await edit_archive_message(self.archive_id, details)
+                except Exception:
+                    pass
+        
+        # Notify requester
+        chan = bot.get_channel(self.channel_id)
+        if isinstance(chan, discord.TextChannel):
+            try:
+                await chan.send(f"<@{self.requester_id}> Your close request was approved by the main claimer. You can now click the Close button to provide a reason and close the ticket.")
+            except Exception:
+                pass
+        
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+    
+    @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
+    async def deny_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only main claimer can deny
+        if interaction.user.id != self.main_claimer_id:
+            try:
+                await interaction.response.send_message("Only the main claimer can deny this request.", ephemeral=True)
+            except Exception:
+                pass
+            return
+        
+        try:
+            await interaction.response.send_message(f"Close request from <@{self.requester_id}> was denied.", ephemeral=False)
+        except Exception:
+            pass
+        
+        # Disable buttons
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
 class InactivityActionView(discord.ui.View):
     """View for staff to decide on inactive tickets"""
     def __init__(self, channel_id: int, archive_id: Optional[int]):
@@ -964,7 +1114,7 @@ class InactivityActionView(discord.ui.View):
         self.channel_id = channel_id
         self.archive_id = archive_id
     
-    @discord.ui.button(label="Keep Open", style=discord.ButtonStyle.success, custom_id="inactivity_keep")
+    @discord.ui.button(label="Keep Open", style=SUCCESS_BUTTON_STYLE, custom_id="inactivity_keep")
     async def keep_open(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is a claimer
         details = None
@@ -1489,15 +1639,27 @@ class PublicCommands(commands.Cog):
             except Exception:
                 pass
             return
+        
+        # Ensure user is a Member (not a User) for guild commands
+        if not isinstance(interaction.user, discord.Member):
+            try:
+                await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            except Exception:
+                pass
+            return
+        
         try:
             modal = AntiPingModal(requester=interaction.user)
             await interaction.response.send_modal(modal)
-        except Exception:
+        except Exception as e:
             logger.exception("Failed to open antiping modal")
             try:
-                await interaction.response.send_message("Failed to open Anti-Ping setup.", ephemeral=True)
-            except Exception:
-                pass
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"Failed to open Anti-Ping setup: {str(e)}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"Failed to open Anti-Ping setup: {str(e)}", ephemeral=True)
+            except Exception as e2:
+                logger.exception("Failed to send error message for antiping command")
 
     @app_commands.command(name="suggest", description="Submit a suggestion")
     @app_commands.describe(title="Suggestion title", description="Suggestion details", image_url="Optional image", anonymous="Remain anonymous?")
@@ -1782,6 +1944,12 @@ class AutoResponder(commands.Cog):
 
         # Message-based commands
         if content.startswith("-inactive"):
+            # Check if in a ticket channel
+            if not isinstance(message.channel, discord.TextChannel):
+                return
+            if message.channel.category_id != TICKET_CATEGORY_ID:
+                return
+            
             # Check if user is staff
             if not any(role.id in STAFF_ROLES for role in message.author.roles):
                 try:
@@ -1794,17 +1962,100 @@ class AutoResponder(commands.Cog):
                 await message.delete()
             except Exception:
                 pass
-            parts = message.content.split(maxsplit=1)
-            mention_text = parts[1] if len(parts) > 1 else ""
+            
+            # Get ticket details
+            topic = message.channel.topic or ""
+            match = re.search(r"ticket_archive:(\d+)", topic)
+            archive_id = int(match.group(1)) if match else None
+            
+            details = None
+            if archive_id:
+                arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                if arch_ch:
+                    try:
+                        am = await arch_ch.fetch_message(archive_id)
+                        details = _extract_json_from_codeblock(am.content or "")
+                    except Exception:
+                        pass
+            
+            if not details:
+                arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                if arch_ch:
+                    try:
+                        async for m in arch_ch.history(limit=2000):
+                            p = _extract_json_from_codeblock(m.content or "")
+                            if p and p.get("event_type") == TICKET_ARCHIVE_TYPE and p.get("channel_id") == message.channel.id:
+                                details = p
+                                archive_id = m.id
+                                break
+                    except Exception:
+                        pass
+            
+            if not details:
+                try:
+                    await message.channel.send("Ticket details not found.", delete_after=8)
+                except Exception:
+                    pass
+                return
+            
+            opener_id = details.get("opener_id")
+            main_claimer = details.get("main_claimer")
+            claimers = details.get("claimers", []) or []
+            
+            # Ping opener with 24-hour warning
+            opener_mention = f"<@{opener_id}>" if opener_id else ""
             embed = discord.Embed(
-                title="⚠️ Ticket Inactivity",
-                description=f"This ticket will be automatically closed within 24 hours of inactivity.\n{mention_text}",
+                title="⚠️ Ticket Inactivity Warning",
+                description=f"{opener_mention} This ticket has been marked as inactive.\n\n**This ticket will be automatically closed in 24 hours if no response is received.**\n\nPlease respond to keep this ticket open.",
                 color=discord.Color.orange()
             )
+            embed.set_footer(text="24-hour countdown started")
+            
             try:
-                await message.channel.send(embed=embed)
+                warning_msg = await message.channel.send(content=opener_mention if opener_id else None, embed=embed)
             except Exception:
-                pass
+                warning_msg = None
+            
+            # Update archive with inactivity ping time
+            details["inactivity_pinged_at"] = datetime.now(timezone.utc).isoformat()
+            details["inactivity_warning_msg_id"] = warning_msg.id if warning_msg else None
+            if archive_id:
+                try:
+                    await edit_archive_message(archive_id, details)
+                except Exception:
+                    pass
+            
+            # Schedule 24-hour follow-up
+            async def inactivity_followup():
+                await asyncio.sleep(24 * 60 * 60)  # 24 hours
+                
+                # Re-check ticket status
+                arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                if arch_ch and archive_id:
+                    try:
+                        am = await arch_ch.fetch_message(archive_id)
+                        updated_details = _extract_json_from_codeblock(am.content or "")
+                        if updated_details and updated_details.get("status") == "open":
+                            # Still open, ping main claimer with panel
+                            chan = bot.get_channel(message.channel.id)
+                            if isinstance(chan, discord.TextChannel):
+                                main_claimer_id = updated_details.get("main_claimer")
+                                if main_claimer_id:
+                                    claimer_mention = f"<@{main_claimer_id}>"
+                                    followup_embed = discord.Embed(
+                                        title="⏰ Ticket Inactivity - 24 Hours Elapsed",
+                                        description=f"{claimer_mention} This ticket has been inactive for 24 hours after the warning was sent.\n\nPlease decide whether to keep this ticket open or close it.",
+                                        color=discord.Color.red()
+                                    )
+                                    view = InactivityActionView(message.channel.id, archive_id)
+                                    try:
+                                        await chan.send(content=claimer_mention, embed=followup_embed, view=view)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        logger.exception("Failed to send inactivity follow-up")
+            
+            asyncio.create_task(inactivity_followup())
 
         elif content == "-game":
             try:
@@ -2310,14 +2561,44 @@ async def on_interaction(interaction: discord.Interaction):
                         except Exception:
                             pass
                 
-                # Check permissions
-                claimers = details.get("claimers", []) if details else []
-                is_claimer = interaction.user.id in claimers
-                can_view_channel = chan.permissions_for(interaction.user).view_channel if isinstance(interaction.user, discord.Member) else False
+                if not details:
+                    # Fallback search
+                    arch_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+                    if arch_ch:
+                        try:
+                            async for m in arch_ch.history(limit=2000):
+                                p = _extract_json_from_codeblock(m.content or "")
+                                if p and p.get("event_type") == TICKET_ARCHIVE_TYPE and p.get("channel_id") == chan.id:
+                                    details = p
+                                    archive_id = m.id
+                                    break
+                        except Exception:
+                            pass
                 
-                # Anyone who can view the channel can close if unclaimed
-                if not claimers and can_view_channel:
-                    # Allow close
+                if not details:
+                    try:
+                        await interaction.response.send_message("Ticket details not found.", ephemeral=True)
+                    except Exception:
+                        pass
+                    return
+                
+                # Get ticket info
+                ticket_type = details.get("ticket_type", "")
+                owner_role_id = TICKET_TYPES.get(ticket_type, {}).get("owner_role_id")
+                claimers = details.get("claimers", []) or []
+                main_claimer = details.get("main_claimer")
+                is_claimer = interaction.user.id in claimers
+                is_main_claimer = interaction.user.id == main_claimer
+                
+                # Check if user has owner role
+                has_owner_role = False
+                if isinstance(interaction.user, discord.Member) and owner_role_id:
+                    owner_role = chan.guild.get_role(owner_role_id)
+                    if owner_role and owner_role in interaction.user.roles:
+                        has_owner_role = True
+                
+                # If unclaimed, anyone can close
+                if not claimers:
                     modal = CloseReasonModal(archive_id, interaction.user.id, channel_id)
                     try:
                         await interaction.response.send_modal(modal)
@@ -2325,21 +2606,50 @@ async def on_interaction(interaction: discord.Interaction):
                         pass
                     return
                 
-                # If claimed, only claimers can close
-                if claimers and not is_claimer:
+                # If claimed:
+                # - Only owner role can close directly
+                # - If non-owner tries to close, request approval from main claimer
+                if has_owner_role:
+                    # Owner role can close directly
+                    modal = CloseReasonModal(archive_id, interaction.user.id, channel_id)
                     try:
-                        await interaction.response.send_message("Only claimers can close this ticket.", ephemeral=True)
+                        await interaction.response.send_modal(modal)
                     except Exception:
                         pass
                     return
-                
-                # Claimer is closing
-                modal = CloseReasonModal(archive_id, interaction.user.id, channel_id)
-                try:
-                    await interaction.response.send_modal(modal)
-                except Exception:
-                    pass
-                return
+                else:
+                    # Non-owner trying to close claimed ticket - need main claimer approval
+                    if main_claimer:
+                        # Check if already approved
+                        approved_closers = details.get("approved_closers", []) or []
+                        if interaction.user.id in approved_closers:
+                            # Already approved, allow close
+                            modal = CloseReasonModal(archive_id, interaction.user.id, channel_id)
+                            try:
+                                await interaction.response.send_modal(modal)
+                            except Exception:
+                                pass
+                            return
+                        
+                        # Send approval request
+                        view = CloseApprovalView(interaction.user.id, channel_id, archive_id, main_claimer)
+                        try:
+                            await chan.send(
+                                content=f"<@{main_claimer}> {interaction.user.mention} wants to close this ticket. Do you approve?",
+                                view=view
+                            )
+                            await interaction.response.send_message("Close request sent to the main claimer for approval.", ephemeral=True)
+                        except Exception:
+                            try:
+                                await interaction.response.send_message("Failed to send approval request.", ephemeral=True)
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            await interaction.response.send_message("Only the ticket owner role can close this ticket.", ephemeral=True)
+                        except Exception:
+                            pass
+                    return
 
             # Expand button
             if cid and cid.startswith("expand:"):
@@ -2457,6 +2767,10 @@ async def on_ready():
             res = bot.add_cog(PublicCommands(bot))
             if inspect.isawaitable(res):
                 await res
+            logger.info("PublicCommands cog added successfully")
+            # Log registered commands for debugging
+            commands_list = [cmd.name for cmd in bot.tree.walk_commands() if hasattr(cmd, 'name')]
+            logger.info(f"Registered app commands: {commands_list}")
     except Exception:
         logger.exception("Failed to add PublicCommands cog")
 
@@ -2503,8 +2817,14 @@ async def on_ready():
             pass
         sync_res = bot.tree.sync(guild=guild_obj)
         if inspect.isawaitable(sync_res):
-            await sync_res
-        logger.info("App commands synced to guild.")
+            synced = await sync_res
+        else:
+            synced = sync_res
+        logger.info(f"App commands synced to guild. Synced {len(synced) if synced else 0} commands.")
+        # Log synced command names for debugging
+        if synced:
+            synced_names = [cmd.name if hasattr(cmd, 'name') else str(cmd) for cmd in synced]
+            logger.info(f"Synced commands: {synced_names}")
     except Exception:
         logger.exception("Failed to sync app commands on_ready")
 
