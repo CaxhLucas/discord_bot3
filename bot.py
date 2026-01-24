@@ -694,7 +694,7 @@ async def collect_ticket_history(channel: discord.TextChannel) -> str:
 # Modals
 # ------------------------
 class AntiPingModal(discord.ui.Modal, title="Anti-Ping — Duration (optional)"):
-    duration = discord.ui.TextInput(label="Duration in hours (leave blank for indefinite)", required=False, max_length=20, placeholder="e.g. 6 or 24")
+    duration = discord.ui.TextInput(label="Duration (hours, blank = indefinite)", required=False, max_length=20, placeholder="e.g. 6 or 24")
 
     def __init__(self, requester: discord.Member):
         super().__init__()
