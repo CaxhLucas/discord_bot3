@@ -34,6 +34,14 @@ BOD_ALERT_CHANNEL_ID = 1443716401176248492
 PARTNERSHIP_CHANNEL_ID = 1421873146834718740
 SSU_ROLE_ID = 1371272556820041854
 
+# Welcome System
+WELCOME_CHANNEL_ID = 1371272557692452886
+WELCOME_BANNER = "https://media.discordapp.net/attachments/1400671398535626938/1450969770190045327/Welcome.png?ex=69769166&is=69753fe6&hm=a08abb72a6d1aa36dcc55c33b81b2f418f3a5e55ac7287482aa2a99727444f7c&=&format=webp&quality=lossless&width=912&height=422"
+
+# Message Deletion Monitoring
+DELETED_MESSAGE_ALERT_USER_ID = 1341152829967958114
+MONITORED_CHANNELS = [1371272557692452884, 1443716401176248492, 1459286015905890345]
+
 # Ticket & support config
 SUPPORT_CHANNEL_ID = 1371272558221066261
 TICKET_CATEGORY_ID = 1450278544008679425
@@ -87,6 +95,102 @@ known_infraction_msgids: Set[int] = set()
 # scan state stored in MOD_ARCHIVE: event_type "infraction_scan_state"
 _scan_state_archive_id: Optional[int] = None
 _last_scan_dt: Optional[datetime] = None
+
+# ------------------------
+# Welcome System
+# ------------------------
+WELCOME_MESSAGES = [
+    "[user] just joined Iowa State Roleplay. Welcome in.",
+    "Welcome [user]. Check the rules and get set up.",
+    "Welcome to IS:RP, [user]. Glad to have you here.",
+    "[user] is in. Take a look around and jump in when ready.",
+    "Welcome [user]. Roles and rules are in the info channels.",
+    "[user] joined. If you are new to RP, staff can help.",
+    "Welcome in, [user]. Get set up before jumping in.",
+    "[user] just got here. Welcome.",
+    "Welcome [user] to Iowa State Roleplay. Hope you enjoy it.",
+    "[user] joined. Read the rules and have fun."
+]
+
+async def send_welcome_message(member: discord.Member):
+    """Send a welcome message for a new member"""
+    try:
+        welcome_ch = await ensure_channel(WELCOME_CHANNEL_ID)
+        if not welcome_ch:
+            return
+        
+        # Pick a random welcome message
+        message_template = random.choice(WELCOME_MESSAGES)
+        welcome_text = message_template.replace("[user]", member.display_name)
+        
+        # Create embed
+        embed = discord.Embed(
+            description=welcome_text,
+            color=discord.Color.green()
+        )
+        embed.set_image(url=WELCOME_BANNER)
+        embed.set_footer(text=f"User ID: {member.id}")
+        
+        await welcome_ch.send(embed=embed)
+        logger.info(f"Sent welcome message for {member} ({member.id})")
+    except Exception as e:
+        logger.exception(f"Failed to send welcome message for {member}: {e}")
+
+# ------------------------
+# Message Deletion Monitoring
+# ------------------------
+async def send_deleted_message_alert(message: discord.Message, deleter: Optional[discord.Member] = None):
+    """Send DM alert when a message is deleted in monitored channels"""
+    try:
+        # Get the user to DM
+        alert_user = bot.get_user(DELETED_MESSAGE_ALERT_USER_ID)
+        if not alert_user:
+            try:
+                alert_user = await bot.fetch_user(DELETED_MESSAGE_ALERT_USER_ID)
+            except Exception:
+                return
+        
+        if not alert_user:
+            return
+        
+        # Create alert embed
+        embed = discord.Embed(
+            title="🗑️ Message Deleted",
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # Channel info
+        embed.add_field(name="Channel", value=f"#{message.channel.name} ({message.channel.id})", inline=False)
+        
+        # Who deleted it
+        if deleter:
+            embed.add_field(name="Deleted By", value=f"{deleter.mention} ({deleter.id})", inline=False)
+        else:
+            embed.add_field(name="Deleted By", value="Unknown/Auto-deleted", inline=False)
+        
+        # Message author
+        if message.author:
+            embed.add_field(name="Original Author", value=f"{message.author.mention} ({message.author.id})", inline=False)
+        
+        # Message content (truncate if too long)
+        content = message.content or "[No text content]"
+        if len(content) > 1000:
+            content = content[:1000] + "..."
+        embed.add_field(name="Message Content", value=content, inline=False)
+        
+        # Attachments info
+        if message.attachments:
+            attachment_names = [f"• {a.filename}" for a in message.attachments]
+            embed.add_field(name="Attachments", value="\n".join(attachment_names), inline=False)
+        
+        embed.add_field(name="Message ID", value=str(message.id), inline=True)
+        embed.add_field(name="Created At", value=message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"), inline=True)
+        
+        await alert_user.send(embed=embed)
+        logger.info(f"Sent deletion alert for message {message.id} from channel {message.channel.id}")
+    except Exception as e:
+        logger.exception(f"Failed to send deletion alert: {e}")
 
 # ------------------------
 # Anti-ping in-memory map + helpers
@@ -3295,6 +3399,40 @@ async def on_guild_join(guild):
         await guild.leave()
     except Exception:
         pass
+
+@bot.event
+async def on_member_join(member):
+    """Handle new member joining - send welcome message"""
+    # Only welcome members in the main guild
+    if member.guild.id != MAIN_GUILD_ID:
+        return
+    
+    # Small delay to ensure member is fully loaded
+    await asyncio.sleep(1)
+    await send_welcome_message(member)
+
+@bot.event
+async def on_message_delete(message):
+    """Handle message deletion in monitored channels"""
+    # Only monitor specific channels
+    if message.channel.id not in MONITORED_CHANNELS:
+        return
+    
+    # Ignore bot messages
+    if message.author.bot:
+        return
+    
+    # Try to get audit log to find who deleted it
+    deleter = None
+    try:
+        async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
+            if entry.target.id == message.author.id:
+                deleter = entry.user
+                break
+    except Exception:
+        pass
+    
+    await send_deleted_message_alert(message, deleter)
 
 # ====== Run =======
 bot.run(TOKEN)
