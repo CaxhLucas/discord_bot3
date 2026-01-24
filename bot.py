@@ -39,6 +39,10 @@ SUPPORT_CHANNEL_ID = 1371272558221066261
 TICKET_CATEGORY_ID = 1450278544008679425
 TICKET_LOGS_CHANNEL_ID = 1371272560192258130
 
+# FAQ & Staff Positions
+FAQ_CHANNEL_ID = 1407000741733863434
+APPLY_CHANNEL_ID = 1371272557969281166
+
 # Mod archive (persistent storage inside Discord)
 MOD_ARCHIVE_CHANNEL_ID = 1459286015905890345
 
@@ -464,6 +468,176 @@ async def infra_scan_loop():
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 # ------------------------
+# Staff Role System
+# ------------------------
+# Role definitions: (role_id, max_count, display_name, category)
+STAFF_ROLE_DEFINITIONS = {
+    # Senior High Rank Positions
+    1371272557034209497: (1, "Executive Director", "senior"),  # Executive Director
+    1371272557034209496: (1, "Head of Board of Directors", "senior"),  # Head of Board of Directors
+    1371272557034209495: (1, "Director", "senior"),  # Director
+    1402737236528726188: (1, "Assistant Director", "senior"),  # Assistant Director
+    1371272557034209494: (1, "Deputy Director", "senior"),  # Deputy Director
+    1403912752434643025: (1, "Assistant Deputy Director", "senior"),  # Assistant Deputy Director
+    1371272557034209491: (4, "Supervisor", "senior"),  # Supervisor
+    
+    # Server Staff
+    1371272557013242006: (4, "Head Admin", "staff"),  # Head Admin
+    1404679512276602881: (None, "Internal Affairs Team", "staff"),  # Internal Affairs Team (infinite)
+}
+
+STAFF_POSITIONS_ARCHIVE_TYPE = "staff_positions"
+
+async def count_role_members(guild: discord.Guild, role_id: int) -> int:
+    """Count how many members have a specific role"""
+    try:
+        role = guild.get_role(role_id)
+        if not role:
+            return 0
+        count = len([m for m in guild.members if role in m.roles])
+        return count
+    except Exception:
+        return 0
+
+async def update_staff_positions_embed():
+    """Update the staff positions embed in FAQ channel"""
+    try:
+        guild = bot.get_guild(MAIN_GUILD_ID)
+        if not guild:
+            logger.warning("Guild not found for staff positions update")
+            return
+        
+        faq_ch = await ensure_channel(FAQ_CHANNEL_ID)
+        if not faq_ch:
+            logger.warning("FAQ channel not found")
+            return
+        
+        # Get or find the staff positions message from archive
+        archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        message_id = None
+        archive_msg_id = None
+        if archive_ch:
+            try:
+                async for m in archive_ch.history(limit=1000):
+                    parsed = _extract_json_from_codeblock(m.content or "")
+                    if parsed and parsed.get("event_type") == STAFF_POSITIONS_ARCHIVE_TYPE:
+                        message_id = parsed.get("message_id")
+                        archive_msg_id = m.id
+                        break
+            except Exception:
+                pass
+        
+        # Count members for each role
+        role_counts = {}
+        for role_id, (max_count, display_name, category) in STAFF_ROLE_DEFINITIONS.items():
+            count = await count_role_members(guild, role_id)
+            role_counts[role_id] = {
+                "count": count,
+                "max": max_count,
+                "name": display_name,
+                "category": category
+            }
+        
+        # Build embed content - show each individual role
+        senior_lines = []
+        staff_lines = []
+        
+        # Senior High Rank Positions - show ALL director roles individually
+        # Order: Executive Director, Head of Board, Director, Deputy Director, Assistant Deputy Director, Assistant Director, Supervisor
+        senior_role_order = [
+            (1371272557034209497, "Executive Director", 1),  # Executive Director
+            (1371272557034209496, "Head of Board of Directors", 1),  # Head of Board of Directors
+            (1371272557034209495, "Director", 1),  # Director
+            (1371272557034209494, "Deputy Director", 1),  # Deputy Director
+            (1403912752434643025, "Assistant Deputy Director", 1),  # Assistant Deputy Director
+            (1402737236528726188, "Assistant Director", 1),  # Assistant Director
+            (1371272557034209491, "Supervisor", 4),  # Supervisor (max 4)
+        ]
+        
+        for role_id, display_name, max_count in senior_role_order:
+            if role_id in role_counts:
+                info = role_counts[role_id]
+                # Show as "current/max x - Name" format
+                senior_lines.append(f"{info['count']}/{info['max']}x - {display_name}")
+        
+        # Server Staff section - only show roles at Supervisor level and above
+        # Head Admin (4 max)
+        if 1371272557013242006 in role_counts:
+            info = role_counts[1371272557013242006]
+            staff_lines.append(f"{info['count']}/{info['max']}x - Head & Senior Administration")
+        
+        # Internal Affairs Team (infinite, but we'll show it)
+        if 1404679512276602881 in role_counts:
+            info = role_counts[1404679512276602881]
+            staff_lines.append(f"Unlimited - {info['name']}")
+        
+        # Create embed matching the format
+        description_parts = [
+            "Open Staff Positions",
+            "------------------------------",
+            "Senior High Rank Positions"
+        ]
+        description_parts.extend(senior_lines)
+        description_parts.append("------------------------------")
+        description_parts.append("Server Staff")
+        description_parts.extend(staff_lines)
+        description_parts.append("--------------------------")
+        description_parts.append(f"To apply, please visit <#{APPLY_CHANNEL_ID}>")
+        description_parts.append("If you have any questions, comments, or concerns, please do not hesitate to contact our Support or Management Team.")
+        
+        embed = discord.Embed(
+            description="\n".join(description_parts),
+            color=discord.Color.blue()
+        )
+        
+        # Update or create message
+        if message_id:
+            try:
+                msg = await faq_ch.fetch_message(message_id)
+                await msg.edit(embed=embed)
+                logger.info("Updated staff positions embed")
+                
+                # Update archive timestamp
+                if archive_ch and archive_msg_id:
+                    try:
+                        archive_msg = await archive_ch.fetch_message(archive_msg_id)
+                        parsed = _extract_json_from_codeblock(archive_msg.content or "")
+                        if parsed:
+                            parsed["updated_at"] = datetime.now(timezone.utc).isoformat()
+                            await edit_archive_message(archive_msg_id, parsed)
+                    except Exception:
+                        pass
+                return
+            except discord.NotFound:
+                # Message was deleted, need to create new one
+                message_id = None
+            except Exception:
+                logger.exception("Error fetching/editing staff positions message")
+        
+        # Create new message only if it doesn't exist
+        if not message_id:
+            try:
+                msg = await faq_ch.send(embed=embed)
+                message_id = msg.id
+                
+                # Save to archive
+                if archive_ch:
+                    archive_data = {
+                        "event_type": STAFF_POSITIONS_ARCHIVE_TYPE,
+                        "message_id": message_id,
+                        "channel_id": FAQ_CHANNEL_ID,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await archive_details_to_mod_channel(archive_data)
+                logger.info("Created new staff positions embed")
+            except Exception as e:
+                logger.exception(f"Failed to create staff positions embed: {e}")
+    
+    except Exception as e:
+        logger.exception(f"Error updating staff positions embed: {e}")
+
+# ------------------------
 # Anti-ping persistence helpers
 # ------------------------
 async def _save_antiping_entry(parsed: Dict[str, Any]) -> Optional[int]:
@@ -694,7 +868,7 @@ async def collect_ticket_history(channel: discord.TextChannel) -> str:
 # Modals
 # ------------------------
 class AntiPingModal(discord.ui.Modal, title="Anti-Ping — Duration (optional)"):
-    duration = discord.ui.TextInput(label="Duration (hours, blank = indefinite)", required=False, max_length=20, placeholder="e.g. 6 or 24")
+    duration = discord.ui.TextInput(label="Duration (hours, blank = infinite)", required=False, max_length=20, placeholder="e.g. 6 or 24")
 
     def __init__(self, requester: discord.Member):
         super().__init__()
@@ -1694,6 +1868,17 @@ class PublicCommands(commands.Cog):
         )
         embed.set_image(url=SUPPORT_EMBED_BANNER)
         await interaction.response.send_message(embed=embed, ephemeral=False)
+    
+    @app_commands.command(name="updatestaff", description="Update staff positions embed (BOD only)")
+    @app_commands.check(is_bod)
+    async def updatestaff(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await update_staff_positions_embed()
+            await interaction.followup.send("Staff positions embed updated successfully.", ephemeral=True)
+        except Exception as e:
+            logger.exception("Failed to update staff positions")
+            await interaction.followup.send(f"Failed to update staff positions: {str(e)}", ephemeral=True)
 
 # ------------------------
 # Auto Responder Cog
@@ -2322,6 +2507,44 @@ async def on_guild_role_create(role):
     except Exception:
         pass
 
+# Debounce for staff positions updates to prevent lag
+_staff_update_task: Optional[asyncio.Task] = None
+_staff_update_pending = False
+
+async def _debounced_staff_update():
+    """Debounced update to prevent spam"""
+    global _staff_update_pending
+    await asyncio.sleep(5)  # Wait 5 seconds for any additional role changes
+    _staff_update_pending = False
+    try:
+        await update_staff_positions_embed()
+    except Exception:
+        logger.exception("Error in debounced staff positions update")
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Update staff positions embed when member roles change"""
+    global _staff_update_task, _staff_update_pending
+    
+    try:
+        # Check if any tracked staff roles were added or removed
+        before_roles = {r.id for r in before.roles}
+        after_roles = {r.id for r in after.roles}
+        
+        # Check if any staff role changed
+        staff_role_ids = set(STAFF_ROLE_DEFINITIONS.keys())
+        if before_roles.symmetric_difference(after_roles) & staff_role_ids:
+            # A tracked staff role was added or removed
+            if not _staff_update_pending:
+                _staff_update_pending = True
+                # Cancel previous task if exists
+                if _staff_update_task and not _staff_update_task.done():
+                    _staff_update_task.cancel()
+                # Create new debounced update task
+                _staff_update_task = asyncio.create_task(_debounced_staff_update())
+    except Exception:
+        logger.exception("Error in on_member_update for staff positions")
+
 # ------------------------
 # Interaction handling
 # ------------------------
@@ -2807,6 +3030,37 @@ async def on_ready():
         await ensure_ticket_ui_messages()
     except Exception:
         logger.exception("Failed to ensure ticket UI messages")
+    
+    # Initialize staff positions embed (only if message doesn't exist)
+    try:
+        # Check if message already exists in archive
+        archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        message_exists = False
+        if archive_ch:
+            try:
+                async for m in archive_ch.history(limit=1000):
+                    parsed = _extract_json_from_codeblock(m.content or "")
+                    if parsed and parsed.get("event_type") == STAFF_POSITIONS_ARCHIVE_TYPE:
+                        message_id = parsed.get("message_id")
+                        if message_id:
+                            faq_ch = await ensure_channel(FAQ_CHANNEL_ID)
+                            if faq_ch:
+                                try:
+                                    await faq_ch.fetch_message(message_id)
+                                    message_exists = True
+                                    logger.info("Staff positions embed already exists, skipping creation")
+                                except discord.NotFound:
+                                    # Message was deleted, will be recreated
+                                    pass
+                        break
+            except Exception:
+                pass
+        
+        # Only create/update if message doesn't exist
+        if not message_exists:
+            await update_staff_positions_embed()
+    except Exception:
+        logger.exception("Failed to initialize staff positions embed")
 
     # Sync slash commands
     try:
