@@ -1799,6 +1799,177 @@ class IAGroup(app_commands.Group):
         await interaction.followup.send(f"Opened IA case {case_str} in {chan.mention}", ephemeral=False)
 
 # ------------------------
+# Staff Commands Cog
+# ------------------------
+class StaffCommands(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @app_commands.command(name="promote", description="Promote a staff member")
+    @app_commands.check(is_bod)
+    @app_commands.describe(user="Staff member to promote", new_rank="New rank", reason="Reason for promotion")
+    async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
+        embed = discord.Embed(
+            title="📈 Staff Promotion",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="New Rank", value=new_rank, inline=True)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Promoted By", value=interaction.user.mention, inline=True)
+        channel = interaction.guild.get_channel(PROMOTION_CHANNEL_ID)
+        promotion_message = None
+        if channel:
+            try:
+                promotion_message = await channel.send(content=user.mention, embed=embed)
+            except Exception:
+                pass
+
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        details = {
+            "event_type": "promote",
+            "user": f"{user} ({getattr(user, 'id', None)})",
+            "user_id": getattr(user, "id", None),
+            "new_rank": new_rank,
+            "reason": reason,
+            "promoted_by": f"{interaction.user} ({interaction.user.id})",
+            "timestamp": now_str,
+            "promotion_message_id": getattr(promotion_message, "id", None),
+            "extra": None,
+        }
+        log_ch = await ensure_channel(LOGGING_CHANNEL_ID)
+        if log_ch:
+            log_embed = discord.Embed(title="Staff Promotion Logged", color=discord.Color.green())
+            log_embed.add_field(name="User", value=f"{user}", inline=True)
+            log_embed.add_field(name="New Rank", value=new_rank, inline=True)
+            log_embed.add_field(name="Promoted By", value=f"{interaction.user}", inline=True)
+            log_embed.set_footer(text=f"At {now_str}")
+            try:
+                await send_embed_with_expand(log_ch, log_embed, details)
+            except Exception:
+                pass
+
+        await interaction.response.send_message(f"Promotion logged and {user.display_name} has been pinged.", ephemeral=True)
+
+    @app_commands.command(name="infract", description="Issue an infraction to a staff member")
+    @app_commands.check(is_bod)
+    @app_commands.describe(user="Staff member", reason="Reason", punishment="Punishment", expires="Optional expiry")
+    async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
+        code = random.randint(1000, 9999)
+        embed = discord.Embed(
+            title=f"⚠️ Staff Infraction - Code {code}",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="User", value=user.mention, inline=True)
+        embed.add_field(name="Punishment", value=punishment, inline=True)
+        embed.add_field(name="Reason", value=reason, inline=False)
+        embed.add_field(name="Issued By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Expires", value=expires, inline=True)
+
+        infra_channel = interaction.guild.get_channel(INFRACTION_CHANNEL_ID)
+        sent_inf_msg = None
+        if infra_channel:
+            try:
+                sent_inf_msg = await infra_channel.send(content=user.mention, embed=embed)
+            except Exception:
+                pass
+
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        details = {
+            "event_type": "infract",
+            "code": code,
+            "user": f"{user} ({getattr(user, 'id', None)})",
+            "user_id": getattr(user, "id", None),
+            "punishment": punishment,
+            "reason": reason,
+            "issued_by": f"{interaction.user} ({interaction.user.id})",
+            "expires": expires,
+            "timestamp": now_str,
+            "infraction_message_id": getattr(sent_inf_msg, "id", None),
+            "attachments": [],
+            "extra": None,
+        }
+
+        log_ch = await ensure_channel(LOGGING_CHANNEL_ID)
+        if log_ch:
+            log_embed = discord.Embed(title="Staff Infraction Issued", color=discord.Color.red())
+            log_embed.add_field(name="User", value=f"{user}", inline=True)
+            log_embed.add_field(name="Code", value=str(code), inline=True)
+            log_embed.add_field(name="Punishment", value=punishment, inline=True)
+            log_embed.add_field(name="Issued By", value=f"{interaction.user}", inline=True)
+            log_embed.set_footer(text=f"At {now_str}")
+            try:
+                await send_embed_with_expand(log_ch, log_embed, details)
+            except Exception:
+                pass
+
+        try:
+            await user.send(embed=embed)
+        except Exception:
+            pass
+
+        await interaction.response.send_message(f"Infraction issued and {user.display_name} has been notified.", ephemeral=True)
+
+    @app_commands.command(name="serverstart", description="Start a session")
+    @app_commands.check(is_bod)
+    async def serverstart(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="✅ Session Started",
+            description="The Staff Team has started a session!\nPlease read all in-game rules before joining.\n**Server Name:** Iowa State Roleplay\n**In-game Code:** vcJJf",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=SERVER_START_BANNER)
+        channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
+        if channel:
+            try:
+                await channel.send(content=f"<@&{SSU_ROLE_ID}>", embed=embed)
+            except Exception:
+                pass
+        await interaction.response.send_message("Session started and SSU pinged.", ephemeral=True)
+
+    @app_commands.command(name="serverstop", description="End a session")
+    @app_commands.check(is_bod)
+    async def serverstop(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="⛔ Session Ended",
+            description="The server is currently shut down.\nDo not join in-game unless instructed by SHR+.",
+            color=discord.Color.red()
+        )
+        embed.set_image(url=SERVER_SHUTDOWN_BANNER)
+        channel = interaction.guild.get_channel(SESSION_CHANNEL_ID)
+        if channel:
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
+        await interaction.response.send_message("Session ended.", ephemeral=True)
+
+    @app_commands.command(name="say", description="Send a message as the bot")
+    @app_commands.check(is_bod)
+    @app_commands.describe(channel="Channel", message="Message content")
+    async def say(self, interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+        try:
+            await channel.send(message)
+        except Exception:
+            pass
+        await interaction.response.send_message(f"Message sent to {channel.mention}", ephemeral=True)
+
+    @app_commands.command(name="embled", description="Send a custom embed (BOD only)")
+    @app_commands.check(is_bod)
+    @app_commands.describe(channel="Target channel", title="Optional title", description="Embed description", image_url="Optional image URL")
+    async def embled(self, interaction: discord.Interaction, channel: discord.TextChannel, description: str, title: str = None, image_url: str = None):
+        embed = discord.Embed(description=description, color=discord.Color.blurple())
+        if title:
+            embed.title = title
+        if image_url:
+            embed.set_image(url=image_url)
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            pass
+        await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
+
+# ------------------------
 # Public Commands Cog
 # ------------------------
 class PublicCommands(commands.Cog):
@@ -3013,18 +3184,6 @@ async def on_ready():
     except Exception:
         logger.exception("Failed to add AutoResponder cog")
 
-    # Add command groups
-    try:
-        existing = [c.name for c in bot.tree.walk_commands()]
-        if "infraction" not in existing:
-            bot.tree.add_command(InfractionGroup())
-        if "promotion" not in existing:
-            bot.tree.add_command(PromotionGroup())
-        if "ia" not in existing:
-            bot.tree.add_command(IAGroup())
-    except Exception:
-        logger.exception("Failed to add command groups")
-
     # Ensure ticket UI exists
     try:
         await ensure_ticket_ui_messages()
@@ -3062,9 +3221,33 @@ async def on_ready():
     except Exception:
         logger.exception("Failed to initialize staff positions embed")
 
+    # Add command groups (remove duplicates first, then add)
+    guild_obj = discord.Object(id=MAIN_GUILD_ID)
+    try:
+        # Remove existing groups to prevent duplicates
+        try:
+            bot.tree.remove_command("infraction", guild=guild_obj)
+        except Exception:
+            pass
+        try:
+            bot.tree.remove_command("promotion", guild=guild_obj)
+        except Exception:
+            pass
+        try:
+            bot.tree.remove_command("ia", guild=guild_obj)
+        except Exception:
+            pass
+        
+        # Add command groups
+        bot.tree.add_command(InfractionGroup(), guild=guild_obj)
+        bot.tree.add_command(PromotionGroup(), guild=guild_obj)
+        bot.tree.add_command(IAGroup(), guild=guild_obj)
+        logger.info("Command groups registered: infraction, promotion, ia")
+    except Exception:
+        logger.exception("Failed to add command groups")
+
     # Sync slash commands
     try:
-        guild_obj = discord.Object(id=MAIN_GUILD_ID)
         try:
             bot.tree.copy_global_to(guild=guild_obj)
         except Exception:
