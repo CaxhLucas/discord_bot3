@@ -79,6 +79,42 @@ SERVER_SHUTDOWN_BANNER = "https://media.discordapp.net/attachments/1371272559705
 
 OWNER_ID = 1341152829967958114
 
+# ====== CUSTOM EMOJIS (BOT ONLY) =======
+# These are custom emojis from the bot emoji server that can be used in embeds
+EMOJI_ISRP = "<:isrp:1465086900640678050>"  # Main IS:RP logo
+EMOJI_VERIFIED = "<:2194orangeverified:1465089668411425072>"  # Orange verified checkmark
+EMOJI_WARNING = "<:2814warning:1465089669732761733>"  # Warning icon
+EMOJI_TOOLS = "<:56644tools:1465089615961657557>"  # Tools/wrench icon
+EMOJI_ADMIN = "<:94919admin:1465089690339250328>"  # Admin icon
+EMOJI_MODERATOR = "<:4916moderator:1465089675596136458>"  # Moderator icon
+EMOJI_STAFF = "<:8795stafforange:1465089651785076891>"  # Staff orange
+EMOJI_MEMBER = "<:91221members:1465089624832737300>"  # Members icon
+EMOJI_CROWN = "<:9049crown:1465089607732302017>"  # Crown icon
+EMOJI_SHIELD = "<:9255orangeshield:1465089684936986705>"  # Orange shield
+EMOJI_BAN = "<:4534ttsbanwhite:1465089596802076672>"  # Ban hammer white
+EMOJI_CHECK = "<:2647checkyeswb:1465089588983763007>"  # Check/yes
+EMOJI_FIRE = "<:8103fireicon:1465089681019633664>"  # Fire icon
+EMOJI_STAR = "<:75645star:1465089620092915772>"  # Star icon
+EMOJI_STOPWATCH = "<:4655stopwatch:1465089598861475871>"  # Stopwatch/timer
+EMOJI_LINK = "<:3007link:1465089590732787893>"  # Link icon
+EMOJI_MEGAPHONE = "<:1882megaphone:1465089587457298625>"  # Megaphone/announce
+EMOJI_PARTNER = "<:7240partnerwhite:1465089604255350997>"  # Partner icon
+EMOJI_BOOSTER = "<:3825boosterorange:1465089655363076118>"  # Booster icon
+EMOJI_INFO = "<:10447information:1465089610664378511>"  # Information icon
+EMOJI_NEW = "<:1083new:1465089665441988750>"  # New badge
+EMOJI_HOUSE = "<:13860house:1465089614443315358>"  # House icon
+EMOJI_CURRENCY = "<:10845currency:1465089612232786001>"  # Currency/dollar
+EMOJI_GIVEAWAY = "<:5091giveaway:1465089676489654468>"  # Giveaway icon
+EMOJI_DEVELOPER = "<:6087developerorange:1465089648228302963>"  # Developer icon
+EMOJI_BOT = "<:8372botorange:1465089650476454170>"  # Bot icon
+EMOJI_MANAGEMENT = "<:8180managementorange:1465089663831376023>"  # Management icon
+EMOJI_OWNER = "<:6641ownerorange:1465089649512026243>"  # Owner icon
+EMOJI_NOTIFY = "<:2904notifystaff:1465089589646721145>"  # Notify staff
+EMOJI_DOT = "<:2054orangedot:1465089667295613168>"  # Orange dot
+EMOJI_CHAT = "<:9891chaticon:1465089610052014120>"  # Chat icon
+EMOJI_COOLDOWN = "<:8649cooldown:1465089682110021967>"  # Cooldown icon
+EMOJI_ARROW = "<:61991right:1465089617773461686>"  # Right arrow
+
 # ====== Logging setup =======
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("discord_bot")
@@ -162,7 +198,7 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
         
         # Create alert embed
         embed = discord.Embed(
-            title="🗑️ Message Deleted",
+            title=f"{EMOJI_WARNING} Message Deleted",
             color=discord.Color.red(),
             timestamp=datetime.now(timezone.utc)
         )
@@ -228,10 +264,10 @@ bot_status_data = {
 class StatusSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Online", emoji="✅", description="Bot is fully operational"),
-            discord.SelectOption(label="Maintenance Scheduled", emoji="🔧", description="Maintenance is planned"),
-            discord.SelectOption(label="Temporary Downtime", emoji="⚠️", description="Short-term issues"),
-            discord.SelectOption(label="Extended Downtime", emoji="🔴", description="Long-term issues")
+            discord.SelectOption(label="Online", description="Bot is fully operational"),
+            discord.SelectOption(label="Maintenance Scheduled", description="Maintenance is planned"),
+            discord.SelectOption(label="Temporary Downtime", description="Short-term issues"),
+            discord.SelectOption(label="Extended Downtime", description="Long-term issues")
         ]
         super().__init__(placeholder="Select bot status...", options=options, min_values=1, max_values=1)
     
@@ -293,11 +329,11 @@ class StatusView(discord.ui.View):
         
         # Create confirmation embed
         confirm_embed = discord.Embed(
-            title="🔧 Maintenance Panel",
+            title=f"{EMOJI_TOOLS} Maintenance Panel",
             description="You are about to open the bot status maintenance panel. This will allow you to change the bot's operational status.",
             color=discord.Color.orange()
         )
-        confirm_embed.add_field(name="⚠️ Warning", value="Changing the bot status will immediately update the public status embed.", inline=False)
+        confirm_embed.add_field(name=f"{EMOJI_WARNING} Warning", value="Changing the bot status will immediately update the public status embed.", inline=False)
         confirm_embed.set_footer(text="Click 'Confirm' to proceed or 'Cancel' to close this dialog.")
         
         # Create confirmation view
@@ -327,11 +363,11 @@ class StatusView(discord.ui.View):
                 view=None
             )
         
-        confirm_btn = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.primary, emoji="✅")
+        confirm_btn = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.primary)
         confirm_btn.callback = confirm_callback
         confirm_view.add_item(confirm_btn)
         
-        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         cancel_btn.callback = cancel_callback
         confirm_view.add_item(cancel_btn)
         
@@ -392,34 +428,34 @@ async def update_bot_status_embed():
         
         # Status colors and emojis
         status_config = {
-            "Online": {"color": discord.Color.green(), "emoji": "✅"},
-            "Maintenance Scheduled": {"color": discord.Color.orange(), "emoji": "🔧"},
-            "Temporary Downtime": {"color": discord.Color.yellow(), "emoji": "⚠️"},
-            "Extended Downtime": {"color": discord.Color.red(), "emoji": "🔴"}
+            "Online": {"color": discord.Color.green(), "emoji": EMOJI_CHECK},
+            "Maintenance Scheduled": {"color": discord.Color.orange(), "emoji": EMOJI_TOOLS},
+            "Temporary Downtime": {"color": discord.Color.yellow(), "emoji": EMOJI_WARNING},
+            "Extended Downtime": {"color": discord.Color.red(), "emoji": EMOJI_BAN}
         }
         
         config = status_config.get(current_status, status_config["Online"])
         
         # Create embed with status as main title
         embed = discord.Embed(
-            title=f"🤖 Iowa State Roleplay Bot Status",
+            title=f"{EMOJI_BOT} Iowa State Roleplay Bot Status",
             description=f"**Current Status:** {config['emoji']} {current_status}",
             color=config["color"],
             timestamp=datetime.now(timezone.utc)
         )
         
-        embed.add_field(name="📊 Server Members", value=f"{member_count:,}", inline=True)
-        embed.add_field(name="⏱️ Uptime", value=uptime_str, inline=True)
-        embed.add_field(name="🤖 Bot Version", value="Production Ready", inline=True)
+        embed.add_field(name=f"{EMOJI_MEMBER} Server Members", value=f"{member_count:,}", inline=True)
+        embed.add_field(name=f"{EMOJI_STOPWATCH} Uptime", value=uptime_str, inline=True)
+        embed.add_field(name=f"{EMOJI_BOT} Bot Version", value="Production Ready", inline=True)
         
-        embed.add_field(name="🔧 Active Systems", 
-                       value="• Tickets System\n• Infraction Scanner\n• Welcome Messages\n• Deletion Monitoring\n• Staff Management\n• Anti-Ping Protection", 
+        embed.add_field(name=f"{EMOJI_TOOLS} Active Systems", 
+                       value=f"{EMOJI_DOT} Tickets System\n{EMOJI_DOT} Infraction Scanner\n{EMOJI_DOT} Welcome Messages\n{EMOJI_DOT} Deletion Monitoring\n{EMOJI_DOT} Staff Management\n{EMOJI_DOT} Anti-Ping Protection", 
                        inline=False)
         
         if bot_status_data["last_updated"]:
             try:
                 last_update = datetime.fromisoformat(bot_status_data["last_updated"])
-                embed.add_field(name="📅 Last Status Change", 
+                embed.add_field(name=f"{EMOJI_STOPWATCH} Last Status Change", 
                                value=last_update.strftime("%Y-%m-%d %H:%M:%S UTC"), 
                                inline=True)
             except Exception:
@@ -1428,7 +1464,7 @@ class CloseReasonModal(discord.ui.Modal, title="Close Ticket Reason"):
             if logs_ch:
                 # Create comprehensive summary embed
                 summary_embed = discord.Embed(
-                    title=f"📋 Ticket Summary — {details.get('ticket_type', 'Unknown').upper()}",
+                    title=f"{EMOJI_INFO} Ticket Summary — {details.get('ticket_type', 'Unknown').upper()}",
                     color=discord.Color.blue()
                 )
                 
@@ -1784,7 +1820,7 @@ async def _check_ticket_inactivity_once():
                     if mention_text:
                         await chan.send(content=mention_text)
                     embed = discord.Embed(
-                        title="⚠️ Ticket Inactivity",
+                        title=f"{EMOJI_WARNING} Ticket Inactivity",
                         description="This ticket will be automatically reviewed within 24 hours of inactivity.",
                         color=discord.Color.orange()
                     )
@@ -1808,7 +1844,7 @@ async def _check_ticket_inactivity_once():
                         await chan.send(content=claimer_mentions)
                     
                     embed = discord.Embed(
-                        title="⚠️ Ticket Inactivity - Action Required",
+                        title=f"{EMOJI_WARNING} Ticket Inactivity - Action Required",
                         description="This ticket has been inactive for 48 hours. Please choose an action:",
                         color=discord.Color.red()
                     )
@@ -2175,7 +2211,7 @@ class StaffCommands(commands.Cog):
     @app_commands.describe(user="Staff member to promote", new_rank="New rank", reason="Reason for promotion")
     async def promote(self, interaction: discord.Interaction, user: discord.Member, new_rank: str, reason: str):
         embed = discord.Embed(
-            title="📈 Staff Promotion",
+            title=f"{EMOJI_STAR} Staff Promotion",
             color=discord.Color.green()
         )
         embed.add_field(name="User", value=user.mention, inline=True)
@@ -2222,7 +2258,7 @@ class StaffCommands(commands.Cog):
     async def infract(self, interaction: discord.Interaction, user: discord.Member, reason: str, punishment: str, expires: str = "N/A"):
         code = random.randint(1000, 9999)
         embed = discord.Embed(
-            title=f"⚠️ Staff Infraction - Code {code}",
+            title=f"{EMOJI_WARNING} Staff Infraction - Code {code}",
             color=discord.Color.red()
         )
         embed.add_field(name="User", value=user.mention, inline=True)
@@ -2279,7 +2315,7 @@ class StaffCommands(commands.Cog):
     @app_commands.check(is_bod)
     async def serverstart(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="✅ Session Started",
+            title=f"{EMOJI_CHECK} Session Started",
             description="The Staff Team has started a session!\nPlease read all in-game rules before joining.\n**Server Name:** Iowa State Roleplay\n**In-game Code:** vcJJf",
             color=discord.Color.green()
         )
@@ -2296,7 +2332,7 @@ class StaffCommands(commands.Cog):
     @app_commands.check(is_bod)
     async def serverstop(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="⛔ Session Ended",
+            title=f"{EMOJI_BAN} Session Ended",
             description="The server is currently shut down.\nDo not join in-game unless instructed by SHR+.",
             color=discord.Color.red()
         )
@@ -2392,7 +2428,7 @@ class PublicCommands(commands.Cog):
     @app_commands.command(name="partnerinfo", description="Information for partners and next steps")
     async def partnerinfo(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🤝 Partnership Information",
+            title=f"{EMOJI_PARTNER} Partnership Information",
             description=(
                 "Hello! Thank you for Partnering with Iowa State Roleplay.\n\n"
                 "Here are your next steps:\n"
@@ -2568,7 +2604,7 @@ class AutoResponder(commands.Cog):
                             claimers_mentions.append(str(cid))
                     claimed_text = ", ".join(claimers_mentions) if claimers_mentions else "None"
 
-                    close_embed = discord.Embed(title="🔒 Case Closed", description=":isrp: This case has been closed.", color=discord.Color.dark_red())
+                    close_embed = discord.Embed(title=f"{EMOJI_SHIELD} Case Closed", description=f"{EMOJI_ISRP} This case has been closed.", color=discord.Color.dark_red())
                     close_embed.add_field(name="Offender", value=offenders_text, inline=False)
                     close_embed.add_field(name="Claimed", value=claimed_text, inline=False)
                     close_embed.add_field(name="Notice", value="DO NOT TYPE HERE. Failure to comply will lead to disciplinary action.\nTo reopen this case please type `-reopen`", inline=False)
@@ -2726,7 +2762,7 @@ class AutoResponder(commands.Cog):
             # Ping opener with 24-hour warning
             opener_mention = f"<@{opener_id}>" if opener_id else ""
             embed = discord.Embed(
-                title="⚠️ Ticket Inactivity Warning",
+                title=f"{EMOJI_WARNING} Ticket Inactivity Warning",
                 description=f"{opener_mention} This ticket has been marked as inactive.\n\n**This ticket will be automatically closed in 24 hours if no response is received.**\n\nPlease respond to keep this ticket open.",
                 color=discord.Color.orange()
             )
@@ -2764,7 +2800,7 @@ class AutoResponder(commands.Cog):
                                 if main_claimer_id:
                                     claimer_mention = f"<@{main_claimer_id}>"
                                     followup_embed = discord.Embed(
-                                        title="⏰ Ticket Inactivity - 24 Hours Elapsed",
+                                        title=f"{EMOJI_STOPWATCH} Ticket Inactivity - 24 Hours Elapsed",
                                         description=f"{claimer_mention} This ticket has been inactive for 24 hours after the warning was sent.\n\nPlease decide whether to keep this ticket open or close it.",
                                         color=discord.Color.red()
                                     )
@@ -2802,7 +2838,7 @@ class AutoResponder(commands.Cog):
             except Exception:
                 pass
             embed = discord.Embed(
-                title="📋 Staff Applications",
+                title=f"{EMOJI_INFO} Staff Applications",
                 description="To apply for staff, please visit <#1371272557969281166>!",
                 color=discord.Color.green()
             )
@@ -2817,7 +2853,7 @@ class AutoResponder(commands.Cog):
             except Exception:
                 pass
             embed = discord.Embed(
-                title="❓ Need Assistance?",
+                title=f"{EMOJI_INFO} Need Assistance?",
                 description=f"Open a ticket in <#{SUPPORT_CHANNEL_ID}>.",
                 color=discord.Color.blurple()
             )
@@ -2832,7 +2868,7 @@ class AutoResponder(commands.Cog):
             except Exception:
                 pass
             embed = discord.Embed(
-                title="🤝 Partnership Information",
+                title=f"{EMOJI_PARTNER} Partnership Information",
                 description=(
                     "Hello! Thank you for Partnering with Iowa State Roleplay.\n\n"
                     "Here are your next steps:\n"
@@ -2953,7 +2989,7 @@ async def on_member_join(member):
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if channel:
             embed = discord.Embed(
-                title="⚠️ New Account Joined",
+                title=f"{EMOJI_WARNING} New Account Joined",
                 description=f"{member.mention} joined. Account is {account_age_days} days old.",
                 color=discord.Color.orange()
             )
@@ -2971,7 +3007,7 @@ async def on_member_join(member):
         channel = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if channel:
             embed = discord.Embed(
-                title="⚠️ Potential Raid Detected",
+                title=f"{EMOJI_WARNING} Potential Raid Detected",
                 description=f"{len(recent_joins_filtered)} members joined within {JOIN_INTERVAL} seconds.",
                 color=discord.Color.red()
             )
@@ -2991,7 +3027,7 @@ async def on_guild_channel_create(channel):
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
-                title="🔔 Channel Created",
+                title=f"{EMOJI_CHAT} Channel Created",
                 description=f"Channel {getattr(channel, 'mention', getattr(channel, 'name', str(channel)))} was created.",
                 color=discord.Color.orange()
             )
@@ -3011,7 +3047,7 @@ async def on_guild_channel_delete(channel):
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
-                title="🗑️ Channel Deleted",
+                title=f"{EMOJI_WARNING} Channel Deleted",
                 description=f"Channel `{getattr(channel, 'name', 'unknown')}` was deleted.",
                 color=discord.Color.orange()
             )
@@ -3030,7 +3066,7 @@ async def on_guild_role_create(role):
         warn_ch = bot.get_channel(BOD_ALERT_CHANNEL_ID)
         if warn_ch:
             embed = discord.Embed(
-                title="➕ Role Created",
+                title=f"{EMOJI_CROWN} Role Created",
                 description=f"Role `{role.name}` was created.",
                 color=discord.Color.orange()
             )
