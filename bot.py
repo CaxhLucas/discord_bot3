@@ -811,123 +811,6 @@ async def scan_batch(limit: int = BATCH_SIZE) -> Dict[str, int]:
 
     return {"scanned": scanned, "archived": archived, "skipped": skipped, "errors": errors}
 
-# ------------------------
-# Partnership Scanner System
-# ------------------------
-@bot.tree.command(name="scan_partnerships", description="Scans partnership ads and generates a staff leaderboard", guild=discord.Object(id=MAIN_GUILD_ID))
-async def scan_partnerships(interaction: discord.Interaction):
-    """
-    Slash command to scan the partnership channel.
-    - Identifies 'Staff' (who posted the ad).
-    - Identifies 'Representative' (who was mentioned).
-    - Archives Representative data to Mod Archive.
-    - Displays a public Staff Leaderboard.
-    """
-    # Check permissions (Staff only to execute)
-    if not is_staff(interaction):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-
-    # Acknowledge immediately (thinking state) because scanning takes time
-    await interaction.response.defer(thinking=True)
-    
-    try:
-        partner_ch = await ensure_channel(PARTNERSHIP_CHANNEL_ID)
-        if not partner_ch:
-            await interaction.followup.send("❌ Partnership channel not found!")
-            return
-
-        # Data storage
-        staff_counts: Dict[int, int] = {}
-        rep_counts: Dict[int, int] = {}
-        representatives_found: List[Dict[str, Any]] = []
-        
-        processed_count = 0
-        
-        # Scan history
-        # We use limit=None to scan everything, or a high number if performance is a concern.
-        async for message in partner_ch.history(limit=None):
-            if message.author.bot:
-                continue
-                
-            processed_count += 1
-            
-            # 1. Identify Staff (Author)
-            staff_member = message.author
-            staff_counts[staff_member.id] = staff_counts.get(staff_member.id, 0) + 1
-            
-            # 2. Identify Representative (Mention)
-            # Only if a mention exists do we count it as a "Representative" found for valid partnership tracking
-            if message.mentions:
-                rep_user = message.mentions[0]
-                rep_counts[rep_user.id] = rep_counts.get(rep_user.id, 0) + 1
-                
-                # Archive Entry (Representatives ONLY)
-                entry = {
-                    "event_type": "partnership_scan_entry",
-                    "message_id": message.id,
-                    "staff_id": staff_member.id,
-                    "representative_id": rep_user.id,
-                    "representative_name": rep_user.name,
-                    "timestamp": message.created_at.isoformat(),
-                    "jump_url": message.jump_url
-                }
-                representatives_found.append(entry)
-
-        # 3. Archive Representative Data
-        # We save a summary log of the representatives found
-        if representatives_found:
-            sorted_reps = sorted(rep_counts.items(), key=lambda item: item[1], reverse=True)
-            archive_data = {
-                "event_type": "partnership_scan_log",
-                "scan_timestamp": datetime.now(timezone.utc).isoformat(),
-                "total_scanned": processed_count,
-                "total_reps_found": len(representatives_found),
-                "rep_leaderboard": [
-                    {"user_id": uid, "count": count} for uid, count in sorted_reps
-                ]
-            }
-            await archive_details_to_mod_channel(archive_data)
-
-        # 4. Output Summary (Public Staff Leaderboard)
-        embed = discord.Embed(
-            title="🏆 Partnership Staff Leaderboard",
-            description=f"Scanned {processed_count} ads in <#{PARTNERSHIP_CHANNEL_ID}>.",
-            color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        # Sort Staff by count
-        sorted_staff = sorted(staff_counts.items(), key=lambda item: item[1], reverse=True)
-        
-        leaderboard_str = ""
-        top_n = 10 # Show top 10 staff
-        
-        for i, (uid, count) in enumerate(sorted_staff[:top_n], 1):
-            user = bot.get_user(uid)
-            if not user:
-                try:
-                    user = await bot.fetch_user(uid)
-                except:
-                    pass
-            
-            name = user.display_name if user else f"Unknown ({uid})"
-            leaderboard_str += f"**{i}. {name}**: {count} partnerships\n"
-            
-        if not leaderboard_str:
-            leaderboard_str = "No staff activity found."
-            
-        embed.add_field(name="Top Staff Members", value=leaderboard_str, inline=False)
-        embed.add_field(name="Stats", value=f"• Total Ads: {processed_count}\n• Representatives Logged: {len(representatives_found)}", inline=False)
-        
-        embed.set_footer(text="Representative data has been archived to Mod Logs.")
-        
-        await interaction.followup.send(embed=embed)
-        
-    except Exception as e:
-        logger.exception(f"Partnership scan failed: {e}")
-        await interaction.followup.send(f"❌ Scan failed: {e}")
-
 async def infra_scan_loop():
     await bot.wait_until_ready()
     await load_infraction_index(lookback=5000)
@@ -3968,17 +3851,32 @@ async def on_message_delete(message):
 
 @bot.event
 async def on_message(message):
-    """Handle messages in bot updates channel to bump status embed"""
+    """Handle messages in bot updates channel to bump status embed (sticky behavior)"""
     # Check if message is in bot updates channel
     if message.channel.id == BOT_STATUS_CHANNEL_ID:
-        # Don't respond to bot messages
+        # Don't respond to bot messages (including our own status message)
         if message.author.bot:
             return
         
         # Small delay to avoid race conditions
         await asyncio.sleep(1)
         
-        # Update the status embed to bump it
+        # Delete the old status message first (to make it "sticky" at the bottom)
+        if bot_status_data["message_id"]:
+            try:
+                status_ch = await ensure_channel(BOT_STATUS_CHANNEL_ID)
+                if status_ch:
+                    old_msg = await status_ch.fetch_message(bot_status_data["message_id"])
+                    await old_msg.delete()
+                    bot_status_data["message_id"] = None  # Clear the ID so a new message is created
+            except discord.NotFound:
+                # Message already deleted
+                bot_status_data["message_id"] = None
+            except Exception as e:
+                logger.debug(f"Failed to delete old status message: {e}")
+                bot_status_data["message_id"] = None
+        
+        # Now create a new status message at the bottom
         await update_bot_status_embed()
 
     # Process commands
