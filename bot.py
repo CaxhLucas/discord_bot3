@@ -3646,6 +3646,156 @@ async def on_ready():
         startup_import_task = asyncio.create_task(_startup_import())
 
 @bot.event
+async def on_ready():
+    """Bot startup and initialization"""
+    logger.info(f"Bot logged in as {bot.user}")
+    
+    # Initialize bot status system
+    try:
+        await load_bot_status()
+        await update_bot_status_embed()
+        logger.info("Bot status system initialized")
+    except Exception:
+        logger.exception("Failed to initialize bot status system")
+
+    # Start background loops
+    try:
+        bot.loop.create_task(infra_scan_loop())
+    except Exception:
+        logger.exception("Failed to start infra_scan_loop")
+
+    try:
+        bot.loop.create_task(ticket_inactivity_loop())
+    except Exception:
+        logger.exception("Failed to start ticket inactivity loop")
+
+    # Register cogs
+    try:
+        if not bot.get_cog("PublicCommands"):
+            res = bot.add_cog(PublicCommands(bot))
+            if inspect.isawaitable(res):
+                await res
+            logger.info("PublicCommands cog added successfully")
+            # Log registered commands for debugging
+            commands_list = [cmd.name for cmd in bot.tree.walk_commands() if hasattr(cmd, 'name')]
+            logger.info(f"Registered app commands: {commands_list}")
+    except Exception:
+        logger.exception("Failed to add PublicCommands cog")
+
+    try:
+        if not bot.get_cog("StaffCommands"):
+            res = bot.add_cog(StaffCommands(bot))
+            if inspect.isawaitable(res):
+                await res
+    except Exception:
+        logger.exception("Failed to add StaffCommands cog")
+
+    try:
+        if not bot.get_cog("AutoResponder"):
+            res = bot.add_cog(AutoResponder(bot))
+            if inspect.isawaitable(res):
+                await res
+    except Exception:
+        logger.exception("Failed to add AutoResponder cog")
+
+    # Ensure ticket UI exists
+    try:
+        await ensure_ticket_ui_messages()
+    except Exception:
+        logger.exception("Failed to ensure ticket UI messages")
+    
+    # Initialize staff positions embed (only if message doesn't exist)
+    try:
+        # Check if message already exists in archive
+        archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        message_exists = False
+        if archive_ch:
+            try:
+                async for m in archive_ch.history(limit=1000):
+                    parsed = _extract_json_from_codeblock(m.content or "")
+                    if parsed and parsed.get("event_type") == STAFF_POSITIONS_ARCHIVE_TYPE:
+                        message_id = parsed.get("message_id")
+                        if message_id:
+                            faq_ch = await ensure_channel(FAQ_CHANNEL_ID)
+                            if faq_ch:
+                                try:
+                                    await faq_ch.fetch_message(message_id)
+                                    message_exists = True
+                                    logger.info("Staff positions embed already exists, skipping creation")
+                                except discord.NotFound:
+                                    # Message was deleted, will be recreated
+                                    pass
+                        break
+            except Exception:
+                pass
+        
+        # Only create/update if message doesn't exist
+        if not message_exists:
+            await update_staff_positions_embed()
+    except Exception:
+        logger.exception("Failed to initialize staff positions embed")
+
+    # Add command groups (remove duplicates first, then add)
+    guild_obj = discord.Object(id=MAIN_GUILD_ID)
+    try:
+        # Remove existing groups to prevent duplicates
+        try:
+            bot.tree.remove_command("infraction", guild=guild_obj)
+        except Exception:
+            pass
+        try:
+            bot.tree.remove_command("promotion", guild=guild_obj)
+        except Exception:
+            pass
+        try:
+            bot.tree.remove_command("ia", guild=guild_obj)
+        except Exception:
+            pass
+        
+        # Add command groups
+        bot.tree.add_command(InfractionGroup(), guild=guild_obj)
+        bot.tree.add_command(PromotionGroup(), guild=guild_obj)
+        bot.tree.add_command(IAGroup(), guild=guild_obj)
+        logger.info("Command groups registered: infraction, promotion, ia")
+    except Exception:
+        logger.exception("Failed to add command groups")
+
+    # Sync slash commands
+    try:
+        try:
+            bot.tree.copy_global_to(guild=guild_obj)
+        except Exception:
+            pass
+        sync_res = bot.tree.sync(guild=guild_obj)
+        if inspect.isawaitable(sync_res):
+            synced = await sync_res
+        else:
+            synced = sync_res
+        logger.info(f"App commands synced to guild. Synced {len(synced) if synced else 0} commands.")
+        # Log synced command names for debugging
+        if synced:
+            synced_names = [cmd.name if hasattr(cmd, 'name') else str(cmd) for cmd in synced]
+            logger.info(f"Synced commands: {synced_names}")
+    except Exception:
+        logger.exception("Failed to sync app commands on_ready")
+
+    # Startup import
+    global startup_import_task
+    if startup_import_task is None:
+        async def _startup_import():
+            try:
+                logger.info("Starting limited startup infraction import.")
+                try:
+                    res = await scan_batch(limit=100)
+                    logger.info(f"Startup infraction batch finished: {res}")
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception("Startup import failed.")
+
+        startup_import_task = asyncio.create_task(_startup_import())
+
+@bot.event
 async def on_guild_join(guild):
     try:
         owner = await bot.fetch_user(OWNER_ID)
