@@ -798,6 +798,9 @@ async def scan_batch(limit: int = BATCH_SIZE) -> Dict[str, int]:
             await asyncio.sleep(BATCH_SLEEP)
 
 
+        except Exception:
+            errors += 1
+
 # ------------------------
 # Partnership Scanner System
 # ------------------------
