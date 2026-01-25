@@ -797,111 +797,124 @@ async def scan_batch(limit: int = BATCH_SIZE) -> Dict[str, int]:
             archived += 1
             await asyncio.sleep(BATCH_SLEEP)
 
+
 # ------------------------
 # Partnership Scanner System
 # ------------------------
-@bot.command(name="scan_partnerships")
-async def scan_partnerships(ctx):
+@bot.tree.command(name="scan_partnerships", description="Scans partnership ads and generates a staff leaderboard")
+async def scan_partnerships(interaction: discord.Interaction):
     """
-    Scans the partnership channel for ads, identifies representatives (via mentions or author),
-    archives the data, and outputs a summary of top representatives.
+    Slash command to scan the partnership channel.
+    - Identifies 'Staff' (who posted the ad).
+    - Identifies 'Representative' (who was mentioned).
+    - Archives Representative data to Mod Archive.
+    - Displays a public Staff Leaderboard.
     """
-    if not is_staff(ctx):
-        await ctx.send("You do not have permission to use this command.", delete_after=5)
+    # Check permissions (Staff only to execute)
+    if not is_staff(interaction):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
 
-    status_msg = await ctx.send("🔍 Starting partnership scan... This may take a moment.")
+    # Acknowledge immediately (thinking state) because scanning takes time
+    await interaction.response.defer(thinking=True)
     
     try:
         partner_ch = await ensure_channel(PARTNERSHIP_CHANNEL_ID)
         if not partner_ch:
-            await status_msg.edit(content="❌ Partnership channel not found!")
+            await interaction.followup.send("❌ Partnership channel not found!")
             return
 
         # Data storage
-        partnerships: List[Dict[str, Any]] = []
+        staff_counts: Dict[int, int] = {}
         rep_counts: Dict[int, int] = {}
+        representatives_found: List[Dict[str, Any]] = []
+        
         processed_count = 0
         
-        # Scan history (limit to last 500 messages to start, or remove limit for full scan)
-        # Using a reasonable limit to avoid blocking, user requested "scan all" but purely all might be too much.
-        # Let's try 1000 for now as a "full" scan of recent history.
+        # Scan history
+        # We use limit=None to scan everything, or a high number if performance is a concern.
         async for message in partner_ch.history(limit=None):
             if message.author.bot:
                 continue
                 
             processed_count += 1
             
-            # 1. Identify Representative
-            # Strategy: First mentioned user -> Fallback to Author
-            representative = None
-            if message.mentions:
-                representative = message.mentions[0]
-            else:
-                representative = message.author
-                
-            # Update stats
-            rep_id = representative.id
-            rep_counts[rep_id] = rep_counts.get(rep_id, 0) + 1
+            # 1. Identify Staff (Author)
+            staff_member = message.author
+            staff_counts[staff_member.id] = staff_counts.get(staff_member.id, 0) + 1
             
-            # Prepare data for archive
-            entry = {
-                "event_type": "partnership_scan_entry",
-                "message_id": message.id,
-                "representative_id": rep_id,
-                "representative_name": representative.name,
-                "timestamp": message.created_at.isoformat(),
-                "jump_url": message.jump_url
+            # 2. Identify Representative (Mention)
+            # Only if a mention exists do we count it as a "Representative" found for valid partnership tracking
+            if message.mentions:
+                rep_user = message.mentions[0]
+                rep_counts[rep_user.id] = rep_counts.get(rep_user.id, 0) + 1
+                
+                # Archive Entry (Representatives ONLY)
+                entry = {
+                    "event_type": "partnership_scan_entry",
+                    "message_id": message.id,
+                    "staff_id": staff_member.id,
+                    "representative_id": rep_user.id,
+                    "representative_name": rep_user.name,
+                    "timestamp": message.created_at.isoformat(),
+                    "jump_url": message.jump_url
+                }
+                representatives_found.append(entry)
+
+        # 3. Archive Representative Data
+        # We save a summary log of the representatives found
+        if representatives_found:
+            sorted_reps = sorted(rep_counts.items(), key=lambda item: item[1], reverse=True)
+            archive_data = {
+                "event_type": "partnership_scan_log",
+                "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_scanned": processed_count,
+                "total_reps_found": len(representatives_found),
+                "rep_leaderboard": [
+                    {"user_id": uid, "count": count} for uid, count in sorted_reps
+                ]
             }
-            partnerships.append(entry)
+            await archive_details_to_mod_channel(archive_data)
 
-        # 2. Archive Data
-        # We will batch these or just save a summary "scan_log" to avoid spamming the archive channel with 1000 messages.
-        # The user asked to "save only the people into the mod archive". 
-        # A monolithic JSON with everyone might be too big for one message (4000 char limit).
-        # We'll save a summary log with the full leaderboard.
-        
-        sorted_reps = sorted(rep_counts.items(), key=lambda item: item[1], reverse=True)
-        
-        archive_data = {
-            "event_type": "partnership_scan_log",
-            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
-            "total_scanned": processed_count,
-            "total_partnerships_found": len(partnerships),
-            "leaderboard": [
-                {"user_id": uid, "count": count} for uid, count in sorted_reps
-            ]
-        }
-        
-        await archive_details_to_mod_channel(archive_data)
-
-        # 3. Output Summary to User
+        # 4. Output Summary (Public Staff Leaderboard)
         embed = discord.Embed(
-            title="🤝 Partnership Scan Complete",
+            title="🏆 Partnership Staff Leaderboard",
+            description=f"Scanned {processed_count} ads in <#{PARTNERSHIP_CHANNEL_ID}>.",
             color=discord.Color.gold(),
             timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(name="Total Ads Scanned", value=str(processed_count), inline=True)
-        embed.add_field(name="Unique Representatives", value=str(len(rep_counts)), inline=True)
         
-        # Top 3
-        top_str = ""
-        for i, (uid, count) in enumerate(sorted_reps[:3], 1):
+        # Sort Staff by count
+        sorted_staff = sorted(staff_counts.items(), key=lambda item: item[1], reverse=True)
+        
+        leaderboard_str = ""
+        top_n = 10 # Show top 10 staff
+        
+        for i, (uid, count) in enumerate(sorted_staff[:top_n], 1):
             user = bot.get_user(uid)
-            name = user.display_name if user else f"Unknown User ({uid})"
-            top_str += f"**#{i}** {name}: {count} partnerships\n"
+            if not user:
+                try:
+                    user = await bot.fetch_user(uid)
+                except:
+                    pass
             
-        if not top_str:
-            top_str = "No partnerships found."
+            name = user.display_name if user else f"Unknown ({uid})"
+            leaderboard_str += f"**{i}. {name}**: {count} partnerships\n"
             
-        embed.add_field(name="🏆 Top 3 Representatives", value=top_str, inline=False)
-        embed.set_footer(text="Full data has been saved to the Mod Archive.")
+        if not leaderboard_str:
+            leaderboard_str = "No staff activity found."
+            
+        embed.add_field(name="Top Staff Members", value=leaderboard_str, inline=False)
+        embed.add_field(name="Stats", value=f"• Total Ads: {processed_count}\n• Representatives Logged: {len(representatives_found)}", inline=False)
         
-        await status_msg.edit(content=None, embed=embed)
+        embed.set_footer(text="Representative data has been archived to Mod Logs.")
+        
+        await interaction.followup.send(embed=embed)
         
     except Exception as e:
         logger.exception(f"Partnership scan failed: {e}")
-        await status_msg.edit(content=f"❌ Scan failed: {e}") 
+        await interaction.followup.send(f"❌ Scan failed: {e}")
+ 
 
             await asyncio.sleep(BATCH_SLEEP)
             continue
