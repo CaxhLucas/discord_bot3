@@ -42,6 +42,10 @@ WELCOME_BANNER = "https://media.discordapp.net/attachments/1400671398535626938/1
 DELETED_MESSAGE_ALERT_USER_ID = 1341152829967958114
 MONITORED_CHANNELS = [1371272557692452884, 1443716401176248492, 1459286015905890345]
 
+# Bot Status System
+BOT_STATUS_CHANNEL_ID = 1464777821485535458
+BOT_OWNER_ID = 1341152829967958114
+
 # Ticket & support config
 SUPPORT_CHANNEL_ID = 1371272558221066261
 TICKET_CATEGORY_ID = 1450278544008679425
@@ -85,6 +89,9 @@ intents.members = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Track bot start time
+bot.start_time = datetime.now(timezone.utc)
 
 # ------------------------
 # Global state for improved infraction scanning
@@ -205,6 +212,240 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
         logger.info(f"Sent deletion alert for message {message.id} from channel {message.channel.id}")
     except Exception as e:
         logger.exception(f"Failed to send deletion alert: {e}")
+
+# ------------------------
+# Bot Status System
+# ------------------------
+BOT_STATUS_ARCHIVE_TYPE = "bot_status"
+
+# Global bot status state
+bot_status_data = {
+    "status": "Online",
+    "message_id": None,
+    "last_updated": None
+}
+
+class StatusSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Online", emoji="✅", description="Bot is fully operational"),
+            discord.SelectOption(label="Maintenance Scheduled", emoji="🔧", description="Maintenance is planned"),
+            discord.SelectOption(label="Temporary Downtime", emoji="⚠️", description="Short-term issues"),
+            discord.SelectOption(label="Extended Downtime", emoji="🔴", description="Long-term issues")
+        ]
+        super().__init__(placeholder="Select bot status...", options=options, min_values=1, max_values=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != BOT_OWNER_ID:
+            await interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
+            return
+        
+        selected_status = self.values[0]
+        global bot_status_data
+        bot_status_data["status"] = selected_status
+        bot_status_data["last_updated"] = datetime.now(timezone.utc).isoformat()
+        
+        # Save to archive
+        await save_bot_status()
+        
+        # Update the status embed
+        await update_bot_status_embed()
+        
+        await interaction.response.send_message(f"Bot status updated to: {selected_status}", ephemeral=True)
+
+class MaintenanceView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(StatusSelect())
+
+class StatusView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        
+        # Refresh button (everyone can use)
+        refresh_btn = discord.ui.Button(
+            label="Refresh Status", 
+            emoji="🔄", 
+            style=discord.ButtonStyle.secondary,
+            custom_id="status_refresh"
+        )
+        refresh_btn.callback = self.refresh_callback
+        self.add_item(refresh_btn)
+        
+        # Maintenance button (owner only)
+        maintenance_btn = discord.ui.Button(
+            label="Maintenance", 
+            emoji="🔧", 
+            style=discord.ButtonStyle.primary,
+            custom_id="status_maintenance"
+        )
+        maintenance_btn.callback = self.maintenance_callback
+        self.add_item(maintenance_btn)
+    
+    async def refresh_callback(self, interaction: discord.Interaction):
+        await update_bot_status_embed()
+        await interaction.response.send_message("Status refreshed!", ephemeral=True)
+    
+    async def maintenance_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != BOT_OWNER_ID:
+            await interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
+            return
+        
+        # Create confirmation embed
+        confirm_embed = discord.Embed(
+            title="🔧 Maintenance Panel",
+            description="You are about to open the bot status maintenance panel. This will allow you to change the bot's operational status.",
+            color=discord.Color.orange()
+        )
+        confirm_embed.add_field(name="⚠️ Warning", value="Changing the bot status will immediately update the public status embed.", inline=False)
+        confirm_embed.set_footer(text="Click 'Confirm' to proceed or 'Cancel' to close this dialog.")
+        
+        # Create confirmation view
+        confirm_view = discord.ui.View(timeout=30)
+        
+        async def confirm_callback(confirm_interaction: discord.Interaction):
+            if confirm_interaction.user.id != BOT_OWNER_ID:
+                await confirm_interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
+                return
+            
+            # Show maintenance panel
+            view = MaintenanceView()
+            await confirm_interaction.response.edit_message(
+                content="Select new bot status:",
+                embed=None,
+                view=view
+            )
+        
+        async def cancel_callback(cancel_interaction: discord.Interaction):
+            if cancel_interaction.user.id != BOT_OWNER_ID:
+                await cancel_interaction.response.send_message("Only the bot owner can use this.", ephemeral=True)
+                return
+            
+            await cancel_interaction.response.edit_message(
+                content="Maintenance panel cancelled.",
+                embed=None,
+                view=None
+            )
+        
+        confirm_btn = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.primary, emoji="✅")
+        confirm_btn.callback = confirm_callback
+        confirm_view.add_item(confirm_btn)
+        
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+        cancel_btn.callback = cancel_callback
+        confirm_view.add_item(cancel_btn)
+        
+        await interaction.response.send_message(embed=confirm_embed, view=confirm_view, ephemeral=True)
+
+async def save_bot_status():
+    """Save bot status to archive"""
+    archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+    if not archive_ch:
+        return
+    
+    data = {
+        "event_type": BOT_STATUS_ARCHIVE_TYPE,
+        "status": bot_status_data["status"],
+        "message_id": bot_status_data["message_id"],
+        "last_updated": bot_status_data["last_updated"] or datetime.now(timezone.utc).isoformat(),
+        "saved_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await archive_details_to_mod_channel(data)
+
+async def load_bot_status():
+    """Load bot status from archive"""
+    global bot_status_data
+    
+    archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+    if not archive_ch:
+        return
+    
+    try:
+        async for m in archive_ch.history(limit=100):
+            parsed = _extract_json_from_codeblock(m.content or "")
+            if parsed and parsed.get("event_type") == BOT_STATUS_ARCHIVE_TYPE:
+                bot_status_data["status"] = parsed.get("status", "Online")
+                bot_status_data["message_id"] = parsed.get("message_id")
+                bot_status_data["last_updated"] = parsed.get("last_updated")
+                break
+    except Exception:
+        pass
+
+async def update_bot_status_embed():
+    """Update or create the bot status embed"""
+    try:
+        status_ch = await ensure_channel(BOT_STATUS_CHANNEL_ID)
+        if not status_ch:
+            return
+        
+        # Get bot stats
+        guild = bot.get_guild(MAIN_GUILD_ID)
+        member_count = guild.member_count if guild else "Unknown"
+        
+        # Calculate uptime
+        uptime = datetime.now(timezone.utc) - bot.start_time if hasattr(bot, 'start_time') else None
+        uptime_str = str(uptime).split('.')[0] if uptime else "Unknown"
+        
+        # Get current status
+        current_status = bot_status_data["status"]
+        
+        # Status colors and emojis
+        status_config = {
+            "Online": {"color": discord.Color.green(), "emoji": "✅"},
+            "Maintenance Scheduled": {"color": discord.Color.orange(), "emoji": "🔧"},
+            "Temporary Downtime": {"color": discord.Color.yellow(), "emoji": "⚠️"},
+            "Extended Downtime": {"color": discord.Color.red(), "emoji": "🔴"}
+        }
+        
+        config = status_config.get(current_status, status_config["Online"])
+        
+        # Create embed with status as main title
+        embed = discord.Embed(
+            title=f"🤖 Iowa State Roleplay Bot Status",
+            description=f"**Current Status:** {config['emoji']} {current_status}",
+            color=config["color"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        embed.add_field(name="📊 Server Members", value=f"{member_count:,}", inline=True)
+        embed.add_field(name="⏱️ Uptime", value=uptime_str, inline=True)
+        embed.add_field(name="🤖 Bot Version", value="Production Ready", inline=True)
+        
+        embed.add_field(name="🔧 Active Systems", 
+                       value="• Tickets System\n• Infraction Scanner\n• Welcome Messages\n• Deletion Monitoring\n• Staff Management\n• Anti-Ping Protection", 
+                       inline=False)
+        
+        if bot_status_data["last_updated"]:
+            try:
+                last_update = datetime.fromisoformat(bot_status_data["last_updated"])
+                embed.add_field(name="📅 Last Status Change", 
+                               value=last_update.strftime("%Y-%m-%d %H:%M:%S UTC"), 
+                               inline=True)
+            except Exception:
+                pass
+        
+        embed.set_footer(text="Use buttons below to refresh or manage status")
+        
+        view = StatusView()
+        
+        # Update existing message or create new one
+        if bot_status_data["message_id"]:
+            try:
+                msg = await status_ch.fetch_message(bot_status_data["message_id"])
+                await msg.edit(embed=embed, view=view)
+            except discord.NotFound:
+                # Message was deleted, create new one
+                sent = await status_ch.send(embed=embed, view=view)
+                bot_status_data["message_id"] = sent.id
+                await save_bot_status()
+        else:
+            # Create new message
+            sent = await status_ch.send(embed=embed, view=view)
+            bot_status_data["message_id"] = sent.id
+            await save_bot_status()
+    except Exception as e:
+        logger.exception(f"Failed to update bot status embed: {e}")
 
 # ------------------------
 # Anti-ping in-memory map + helpers
@@ -3456,6 +3697,24 @@ async def on_message_delete(message):
         logger.debug(f"Failed to get audit log: {e}")
     
     await send_deleted_message_alert(message, deleter)
+
+@bot.event
+async def on_message(message):
+    """Handle messages in bot updates channel to bump status embed"""
+    # Check if message is in bot updates channel
+    if message.channel.id == BOT_STATUS_CHANNEL_ID:
+        # Don't respond to bot messages
+        if message.author.bot:
+            return
+        
+        # Small delay to avoid race conditions
+        await asyncio.sleep(1)
+        
+        # Update the status embed to bump it
+        await update_bot_status_embed()
+
+    # Process commands
+    await bot.process_commands(message)
 
 # ====== Run =======
 bot.run(TOKEN)
