@@ -902,7 +902,8 @@ async def create_ticket_channel_for(user: discord.Member, ticket_type: str, open
     conf = TICKET_TYPES[ticket_type]
     role_ping = conf.get("role_ping")
     role_ping_text = f"<@&{role_ping}>" if role_ping else ""
-    initial_embed = discord.Embed(title=conf["title"], description=f"{role_ping_text}\n\nHello! Thank you for contacting the Iowa State Roleplay Support Team. Please state the reason for opening the ticket, and a support member will respond when they're available!", color=discord.Color.green())
+    opener_ping = f"<@{opener.id}>"
+    initial_embed = discord.Embed(title=conf["title"], description="Hello! Thank you for contacting the Iowa State Roleplay Support Team. Please state the reason for opening the ticket, and a support member will respond when they're available!", color=discord.Color.green())
     initial_embed.set_image(url=SUPPORT_EMBED_BANNER)
     view = discord.ui.View()
     claim_btn = discord.ui.Button(label="Claim", style=discord.ButtonStyle.secondary, custom_id=f"ticket_claim:{chan.id}")
@@ -911,6 +912,9 @@ async def create_ticket_channel_for(user: discord.Member, ticket_type: str, open
     view.add_item(close_btn)
 
     try:
+        # Send pings first, then embed
+        ping_message = f"{role_ping_text} {opener_ping}" if role_ping_text else opener_ping
+        await chan.send(content=ping_message)
         sent = await chan.send(embed=initial_embed, view=view)
     except Exception:
         sent = None
