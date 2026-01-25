@@ -114,6 +114,12 @@ EMOJI_DOT = "<:2054orangedot:1465089667295613168>"  # Orange dot
 EMOJI_CHAT = "<:9891chaticon:1465089610052014120>"  # Chat icon
 EMOJI_COOLDOWN = "<:8649cooldown:1465089682110021967>"  # Cooldown icon
 EMOJI_ARROW = "<:61991right:1465089617773461686>"  # Right arrow
+EMOJI_LOCK = "🔒"
+EMOJI_UNLOCK = "🔓"
+
+# User requested Lockdown constants
+LOCKDOWN_PIN = "7287"
+LOCKDOWN_AUTHORIZED_IDS = [1341152829967958114, 902727710990811186]
 
 # ====== Logging setup =======
 logging.basicConfig(level=logging.INFO)
@@ -1755,6 +1761,110 @@ class InactivityActionView(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception:
             pass
+            pass
+
+class LockdownPinModal(discord.ui.Modal, title="Server Lockdown Authorization"):
+    pin = discord.ui.TextInput(label="Enter 4-Digit PIN", min_length=4, max_length=4, placeholder="XXXX", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 1. Check User ID first (Security)
+        if interaction.user.id not in LOCKDOWN_AUTHORIZED_IDS:
+            await interaction.response.send_message(f"{EMOJI_BAN} **ACCESS DENIED:** User authorization failed. This incident has been logged.", ephemeral=True)
+            return
+
+        # 2. Check PIN
+        if self.pin.value != LOCKDOWN_PIN:
+            await interaction.response.send_message(f"{EMOJI_WARNING} **ACCESS DENIED:** Incorrect PIN. Security systems alerted.", ephemeral=True)
+            return
+
+        # 3. Validated - Show Control Panel
+        embed = discord.Embed(
+            title=f"{EMOJI_LOCK} LOCKDOWN CONTROL CENTER",
+            description=f"✅ Authorization Confirmed.\nUser: {interaction.user.mention}\n\nSelect an action below:",
+            color=discord.Color.red()
+        )
+        
+        view = LockdownControlView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class LockdownControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="INITIATE LOCKDOWN", style=discord.ButtonStyle.danger, emoji="🔒", row=0)
+    async def initiate_lockdown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        if not guild:
+            return
+        
+        channels_locked = 0
+        failed = 0
+        
+        # Lock all text channels
+        for channel in guild.text_channels:
+            try:
+                # Deny send_messages for @everyone
+                overwrite = channel.overwrites_for(guild.default_role)
+                overwrite.send_messages = False
+                await channel.set_permissions(guild.default_role, overwrite=overwrite, reason=f"SERVER LOCKDOWN initiated by {interaction.user}")
+                channels_locked += 1
+            except Exception:
+                failed += 1
+        
+        embed = discord.Embed(
+            title=f"{EMOJI_LOCK} SERVER LOCKED DOWN",
+            description=f"Server has been fully locked.\nChannels Locked: {channels_locked}\nFailed: {failed}",
+            color=discord.Color.dark_red()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+        # Announcement in current channel (optional) and Logging
+        try:
+             log_ch = discord.utils.get(guild.channels, id=LOGGING_CHANNEL_ID)
+             if log_ch:
+                 await log_ch.send(f"{EMOJI_BAN} **SERVER LOCKDOWN** initiated by {interaction.user.mention}")
+        except: pass
+
+    @discord.ui.button(label="LIFT LOCKDOWN (UNLOCK)", style=discord.ButtonStyle.success, emoji="🔓", row=0)
+    async def lift_lockdown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        if not guild:
+            return
+            
+        channels_unlocked = 0
+        failed = 0
+        
+        for channel in guild.text_channels:
+            try:
+                # Reset/Allow send_messages for @everyone (or set to neutral)
+                overwrite = channel.overwrites_for(guild.default_role)
+                overwrite.send_messages = None # Reset to default/neutral
+                await channel.set_permissions(guild.default_role, overwrite=overwrite, reason=f"Lockdown LIFTED by {interaction.user}")
+                channels_unlocked += 1
+            except Exception:
+                failed += 1
+                
+        embed = discord.Embed(
+            title=f"{EMOJI_UNLOCK} SERVER UNLOCKED",
+            description=f"Lockdown has been lifted.\nChannels Unlocked: {channels_unlocked}",
+            color=discord.Color.green()
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+class LockdownConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Proceed", style=discord.ButtonStyle.danger)
+    async def proceed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Open Modal
+        await interaction.response.send_modal(LockdownPinModal())
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Lockdown panel closed.", embed=None, view=None)
 
 # ------------------------
 # Ticket inactivity checking
@@ -2370,6 +2480,118 @@ class StaffCommands(commands.Cog):
             pass
         await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
 
+    @app_commands.command(name="staffinfo", description="View activity and info for a staff member")
+    @app_commands.check(is_bod)
+    async def staffinfo(self, interaction: discord.Interaction, user: discord.Member):
+        await interaction.response.defer(ephemeral=True)
+        
+        # 1. Basic Info
+        join_date = user.joined_at.strftime("%Y-%m-%d") if user.joined_at else "Unknown"
+        created_date = user.created_at.strftime("%Y-%m-%d")
+        roles = [r.mention for r in user.roles if r.name != "@everyone"]
+        roles_str = ", ".join(roles) if roles else "None"
+        
+        # 2. Archive Scan (Tickets, Infractions, Promotions)
+        tickets_claimed = 0
+        infractions_received = 0
+        promotions_received = 0
+        promoted_others = 0
+        infracted_others = 0
+        
+        archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        if archive_ch:
+            try:
+                async for m in archive_ch.history(limit=None): # Scan all history for accurate stats
+                    parsed = _extract_json_from_codeblock(m.content or "")
+                    if not parsed: continue
+                    
+                    evt = parsed.get("event_type")
+                    
+                    if evt == TICKET_ARCHIVE_TYPE:
+                        if user.id in (parsed.get("claimers") or []):
+                            tickets_claimed += 1
+                            
+                    elif evt == "infract":
+                        if parsed.get("user_id") == user.id:
+                            infractions_received += 1
+                        if str(parsed.get("issued_by", "")).find(str(user.id)) != -1: # Rough check
+                            infracted_others += 1
+                            
+                    elif evt == "promote":
+                        if parsed.get("user_id") == user.id:
+                            promotions_received += 1
+                        if str(parsed.get("promoted_by", "")).find(str(user.id)) != -1:
+                            promoted_others += 1
+            except Exception:
+                pass
+                
+        # 3. Message Scan (Limited) - Scan last 1000 messages in key channels for rough activity
+        # This is expensive, so we keep it limited
+        recent_activity = "Unknown"
+        # (Optional: Could implement a more complex activity tracker in database later)
+        
+        embed = discord.Embed(title=f"{EMOJI_STAFF} Staff Profile: {user.display_name}", color=discord.Color.blue())
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.add_field(name="User Info", value=f"ID: {user.id}\nJoined: {join_date}\nCreated: {created_date}", inline=False)
+        embed.add_field(name="Roles", value=roles_str[:1024], inline=False)
+        embed.add_field(name=f"{EMOJI_MEMBER} Archive Activity", value=(
+            f"Tickets Claimed: {tickets_claimed}\n"
+            f"Infractions Received: {infractions_received}\n"
+            f"Promotions Received: {promotions_received}\n"
+            f"Infractions Issued: {infracted_others}\n"
+            f"Promotions Issued: {promoted_others}"
+        ), inline=False)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="memberscan", description="Scan member list for suspicious accounts")
+    @app_commands.check(is_bod)
+    async def memberscan(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        guild = interaction.guild
+        if not guild: return
+        
+        flagged = []
+        now = datetime.now(timezone.utc)
+        
+        for member in guild.members:
+            flags = []
+            
+            # 1. New Account (< 14 days)
+            created_at = member.created_at.replace(tzinfo=timezone.utc)
+            age_days = (now - created_at).days
+            if age_days < 14:
+                flags.append(f"New Account ({age_days} days)")
+                
+            # 2. No PFP
+            if not member.avatar:
+                flags.append("No Profile Picture")
+                
+            # 3. No Roles (except @everyone)
+            if len(member.roles) <= 1:
+                flags.append("No Roles")
+                
+            # 4. Suspicious Name (Regex for widespread numbers/gibberish)
+            # Matches names like "User1293812" or "dkfjhsdkjf" (simple heuristic)
+            if re.match(r"^[a-zA-Z0-9]{10,}$", member.name) and not re.search(r"[aeiouAEIOU]", member.name):
+                flags.append("Gibberish Name")
+            if re.search(r"\d{5,}", member.name):
+                 flags.append("Many Numbers in Name")
+
+            if flags:
+                flagged.append(f"{member.mention} (`{member.id}`)\n⚠️ {', '.join(flags)}")
+                
+        if not flagged:
+            await interaction.followup.send(f"{EMOJI_CHECK} Scan complete. No suspicious accounts found.", ephemeral=False)
+        else:
+            # Chunking message if too long
+            header = f"{EMOJI_WARNING} **SUSPICIOUS ACCOUNTS DETECTED** {EMOJI_WARNING}\n\n"
+            content = header + "\n\n".join(flagged[:30]) # Limit to top 30 to avoid limit
+            if len(flagged) > 30:
+                content += f"\n\n...and {len(flagged) - 30} more."
+            
+            await interaction.followup.send(content, ephemeral=False)
+
 # ------------------------
 # Public Commands Cog
 # ------------------------
@@ -2407,7 +2629,134 @@ class PublicCommands(commands.Cog):
             except Exception as e2:
                 logger.exception("Failed to send error message for antiping command")
 
-    @app_commands.command(name="suggest", description="Submit a suggestion")
+    @app_commands.command(name="lockdown", description="Open the Server Lockdown Panel")
+    async def lockdown(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=f"{EMOJI_WARNING} SERVER LOCKDOWN PANEL {EMOJI_WARNING}",
+            description=(
+                "You are accessing the **EMERGENCY SERVER LOCKDOWN** system.\n\n"
+                "**WARNING:** Initiating a lockdown will remove `Send Messages` permissions for @everyone "
+                "in ALL channels. This should ONLY be used in severe emergencies (Raids, Nukes, etc.)\n\n"
+                "**Requirements:**\n"
+                "• Authorization PIN\n"
+                "• Authorized Administrator Access\n\n"
+                "Press **Proceed** to enter the PIN verification stage."
+            ),
+            color=discord.Color.dark_red()
+        )
+        embed.set_footer(text="Emergency Protocol • Authorized Personnel Only")
+        
+        view = LockdownConfirmView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="ticketstats", description="View server ticket statistics")
+    async def ticketstats(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        archive_ch = await ensure_channel(MOD_ARCHIVE_CHANNEL_ID)
+        if not archive_ch:
+            await interaction.followup.send("Archive channel not found. Cannot compute stats.", ephemeral=True)
+            return
+
+        total_tickets = 0
+        open_tickets = 0
+        closed_tickets = 0
+        type_counts = {"partnership": 0, "hr": 0, "general": 0, "other": 0}
+        claimers_count = {}
+        durations = []
+        
+        try:
+            async for m in archive_ch.history(limit=5000):
+                parsed = _extract_json_from_codeblock(m.content or "")
+                if parsed and parsed.get("event_type") == TICKET_ARCHIVE_TYPE:
+                    total_tickets += 1
+                    status = parsed.get("status", "closed")
+                    ttype = parsed.get("ticket_type", "other")
+                    
+                    if status == "open":
+                        open_tickets += 1
+                    else:
+                        closed_tickets += 1
+                        # Calculate duration
+                        try:
+                            created = datetime.fromisoformat(parsed.get("created_at", "").replace(" UTC", "+00:00"))
+                            closed = datetime.fromisoformat(parsed.get("closed_at", "").replace(" UTC", "+00:00"))
+                            durations.append((closed - created).total_seconds())
+                        except Exception:
+                            pass
+
+                    type_counts[ttype] = type_counts.get(ttype, 0) + 1
+                    
+                    # Count claimers
+                    for claimer_id in parsed.get("claimers", []) or []:
+                        claimers_count[claimer_id] = claimers_count.get(claimer_id, 0) + 1
+        except Exception:
+            logger.exception("Error calculating ticket stats")
+        
+        # Sort top claimers
+        sorted_claimers = sorted(claimers_count.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_claimers_text = ""
+        for cid, count in sorted_claimers:
+            top_claimers_text += f"<@{cid}>: {count} tickets\n"
+        if not top_claimers_text:
+            top_claimers_text = "No data"
+
+        # Avg duration
+        if durations:
+            avg_sec = sum(durations) / len(durations)
+            avg_hours = round(avg_sec / 3600, 1)
+            duration_text = f"{avg_hours} hours"
+        else:
+            duration_text = "N/A"
+
+        embed = discord.Embed(title=f"{EMOJI_ISRP} Ticket Statistics", color=discord.Color.blue())
+        embed.add_field(name="Overview", value=f"Total: {total_tickets}\nOpen: {open_tickets}\nClosed: {closed_tickets}", inline=True)
+        embed.add_field(name="By Type", value=f"General: {type_counts.get('general', 0)}\nHR: {type_counts.get('hr', 0)}\nPartner: {type_counts.get('partnership', 0)}", inline=True)
+        embed.add_field(name="Performance", value=f"Avg Close Time: {duration_text}", inline=True)
+        embed.add_field(name="Top Claimers", value=top_claimers_text, inline=False)
+        
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="serverstats", description="View detailed server statistics")
+    async def serverstats(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("Guild not found.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title=f"{EMOJI_ISRP} Server Statistics - {guild.name}", color=discord.Color.gold())
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        
+        # Members
+        total_members = guild.member_count
+        bots = len([m for m in guild.members if m.bot])
+        humans = total_members - bots
+        
+        # Channels
+        text_channels = len(guild.text_channels)
+        voice_channels = len(guild.voice_channels)
+        categories = len(guild.categories)
+        
+        # Other
+        roles = len(guild.roles)
+        emojis = len(guild.emojis)
+        stickers = len(guild.stickers)
+        boosts = guild.premium_subscription_count
+        boost_tier = guild.premium_tier
+        
+        created_at = guild.created_at.strftime("%B %d, %Y")
+        owner = guild.owner
+        
+        embed.add_field(name=f"{EMOJI_MEMBER} Members", value=f"Total: {total_members}\nHumans: {humans}\nBots: {bots}", inline=True)
+        embed.add_field(name=f"{EMOJI_CHAT} Channels", value=f"Text: {text_channels}\nVoice: {voice_channels}\nCategories: {categories}", inline=True)
+        embed.add_field(name=f"{EMOJI_TOOLS} Component Counts", value=f"Roles: {roles}\nEmojis: {emojis}\nStickers: {stickers}", inline=True)
+        embed.add_field(name=f"{EMOJI_BOOSTER} Boost Status", value=f"Level: {boost_tier}\nBoosts: {boosts}", inline=True)
+        embed.add_field(name=f"{EMOJI_OWNER} Owner", value=f"{owner.mention}", inline=True)
+        embed.add_field(name=f"{EMOJI_STOPWATCH} Created On", value=created_at, inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.describe(title="Suggestion title", description="Suggestion details", image_url="Optional image", anonymous="Remain anonymous?")
     async def suggest(self, interaction: discord.Interaction, title: str, description: str, image_url: str = None, anonymous: bool = False):
         embed = discord.Embed(title=title, description=description, color=discord.Color.green())
