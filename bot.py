@@ -179,6 +179,20 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
             content = content[:1000] + "..."
         embed.add_field(name="Message Content", value=content, inline=False)
         
+        # Embed information
+        if message.embeds:
+            embed_info = ""
+            for i, embed_obj in enumerate(message.embeds, 1):
+                title = getattr(embed_obj, 'title', None) or "No title"
+                description = getattr(embed_obj, 'description', None) or "No description"
+                embed_info += f"**Embed {i}:** {title}\n"
+                if description and description != "No description":
+                    desc_preview = description[:200] + "..." if len(description) > 200 else description
+                    embed_info += f"Description: {desc_preview}\n"
+                embed_info += "---\n"
+            if embed_info:
+                embed.add_field(name="Embed(s) Detected", value=embed_info[:1024], inline=False)
+        
         # Attachments info
         if message.attachments:
             attachment_names = [f"• {a.filename}" for a in message.attachments]
@@ -879,15 +893,16 @@ async def create_ticket_channel_for(user: discord.Member, ticket_type: str, open
     overwrites[user] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True)
     overwrites[opener] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True)
 
+    # Only give access to the specific support team role for this ticket type
     owner_role_id = TICKET_TYPES[ticket_type]["owner_role_id"]
     owner_role = guild.get_role(owner_role_id)
     if owner_role:
         overwrites[owner_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
-    for rid in STAFF_ROLES:
-        r = guild.get_role(rid)
-        if r:
-            overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    # Only give BOD access to all tickets (for oversight)
+    bod_role = guild.get_role(BOD_ROLE_ID)
+    if bod_role:
+        overwrites[bod_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
 
     me = guild.me or guild.get_member(bot.user.id)
     if me:
@@ -3422,19 +3437,23 @@ async def on_message_delete(message):
     if message.channel.id not in MONITORED_CHANNELS:
         return
     
-    # Ignore bot messages
-    if message.author.bot:
-        return
+    # Small delay to allow audit log to update
+    await asyncio.sleep(0.5)
     
     # Try to get audit log to find who deleted it
     deleter = None
     try:
-        async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
-            if entry.target.id == message.author.id:
+        # Look for audit log entries in the last minute
+        async for entry in message.guild.audit_logs(limit=10, action=discord.AuditLogAction.message_delete):
+            # Check if this audit entry matches our deleted message
+            if (entry.target and 
+                hasattr(entry.target, 'id') and 
+                entry.target.id == message.author.id and
+                entry.created_at > message.created_at):
                 deleter = entry.user
                 break
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to get audit log: {e}")
     
     await send_deleted_message_alert(message, deleter)
 
