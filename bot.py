@@ -798,8 +798,18 @@ async def scan_batch(limit: int = BATCH_SIZE) -> Dict[str, int]:
             await asyncio.sleep(BATCH_SLEEP)
 
 
+
         except Exception:
             errors += 1
+
+    if newest_processed_dt:
+        try:
+            _last_scan_dt = newest_processed_dt
+            await save_scan_state(newest_processed_dt)
+        except Exception:
+            logger.exception("Failed to save scan state")
+
+    return {"scanned": scanned, "archived": archived, "skipped": skipped, "errors": errors}
 
 # ------------------------
 # Partnership Scanner System
@@ -917,19 +927,6 @@ async def scan_partnerships(interaction: discord.Interaction):
     except Exception as e:
         logger.exception(f"Partnership scan failed: {e}")
         await interaction.followup.send(f"❌ Scan failed: {e}")
- 
-
-            await asyncio.sleep(BATCH_SLEEP)
-            continue
-
-    if newest_processed_dt:
-        try:
-            _last_scan_dt = newest_processed_dt
-            await save_scan_state(newest_processed_dt)
-        except Exception:
-            logger.exception("Failed to save scan state")
-
-    return {"scanned": scanned, "archived": archived, "skipped": skipped, "errors": errors}
 
 async def infra_scan_loop():
     await bot.wait_until_ready()
