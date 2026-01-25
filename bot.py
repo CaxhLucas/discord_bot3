@@ -804,7 +804,7 @@ async def scan_batch(limit: int = BATCH_SIZE) -> Dict[str, int]:
 # ------------------------
 # Partnership Scanner System
 # ------------------------
-@bot.tree.command(name="scan_partnerships", description="Scans partnership ads and generates a staff leaderboard")
+@bot.tree.command(name="scan_partnerships", description="Scans partnership ads and generates a staff leaderboard", guild=discord.Object(id=MAIN_GUILD_ID))
 async def scan_partnerships(interaction: discord.Interaction):
     """
     Slash command to scan the partnership channel.
