@@ -222,11 +222,34 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
         if message.author:
             embed.add_field(name="Original Author", value=f"{message.author.mention} ({message.author.id})", inline=False)
         
-        # Message content (truncate if too long)
-        content = message.content or "[No text content]"
-        if len(content) > 1000:
-            content = content[:1000] + "..."
-        embed.add_field(name="Message Content", value=content, inline=False)
+        # Message content
+        content_parts = []
+        if message.content:
+            content_parts.append(message.content)
+        
+        # Check for other meaningful content if text is empty
+        if not message.content:
+            extras = []
+            if message.attachments:
+                extras.append(f"[{len(message.attachments)} Attachment(s)]")
+            if message.stickers:
+                extras.append(f"[{len(message.stickers)} Sticker(s)]")
+            if message.embeds:
+                extras.append(f"[{len(message.embeds)} Embed(s)]")
+            
+            if extras:
+                content_parts.append(" ".join(extras))
+            else:
+                # truly empty? (system messages, etc)
+                if message.type != discord.MessageType.default:
+                     content_parts.append(f"[{str(message.type).replace('MessageType.', '')} Message]")
+                else:
+                    content_parts.append("[No text content]")
+
+        full_content = "\n".join(content_parts)
+        if len(full_content) > 1000:
+            full_content = full_content[:1000] + "..."
+        embed.add_field(name="Message Content", value=full_content, inline=False)
         
         # Embed information
         if message.embeds:
@@ -242,10 +265,16 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
             if embed_info:
                 embed.add_field(name="Embed(s) Detected", value=embed_info[:1024], inline=False)
         
-        # Attachments info
         if message.attachments:
-            attachment_names = [f"• {a.filename}" for a in message.attachments]
-            embed.add_field(name="Attachments", value="\n".join(attachment_names), inline=False)
+            attachment_list = []
+            for a in message.attachments:
+                attachment_list.append(f"• [{a.filename}]({a.url})")
+            embed.add_field(name="Attachments", value="\n".join(attachment_list), inline=False)
+        
+        # Stickers info
+        if message.stickers:
+            sticker_names = [f"• {s.name}" for s in message.stickers]
+            embed.add_field(name="Stickers", value="\n".join(sticker_names), inline=False)
         
         embed.add_field(name="Message ID", value=str(message.id), inline=True)
         embed.add_field(name="Created At", value=message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"), inline=True)
@@ -3469,6 +3498,27 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 # ------------------------
 # Interaction handling
 # ------------------------
+def format_slash_command_options(options: List[Dict[str, Any]]) -> str:
+    """Recursively format slash command options into a readable string."""
+    if not options:
+        return ""
+    
+    parts = []
+    for opt in options:
+        name = opt.get("name", "unknown")
+        val = opt.get("value")
+        opt_type = opt.get("type")
+        
+        # Check for nested options (subcommands)
+        nested_options = opt.get("options")
+        if nested_options:
+            nested_str = format_slash_command_options(nested_options)
+            parts.append(f"{name} {nested_str}")
+        else:
+            parts.append(f"{name}: {val}")
+            
+    return " | ".join(parts)
+
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
     try:
@@ -3858,11 +3908,27 @@ async def on_interaction(interaction: discord.Interaction):
                 ch = bot.get_channel(LOGGING_CHANNEL_ID)
                 if ch:
                     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                    
+                    # Parse options/arguments
+                    cmd_options = []
+                    try:
+                        if isinstance(interaction.data, dict):
+                            cmd_options = interaction.data.get("options", [])
+                    except Exception:
+                        pass
+                    
+                    params_str = format_slash_command_options(cmd_options)
+                    
                     embed = discord.Embed(title="Slash Command Used", color=discord.Color.blue())
                     embed.add_field(name="User", value=f"{interaction.user}", inline=True)
                     embed.add_field(name="Command", value=f"/{cmd_name}", inline=True)
+                    
                     channel_info = getattr(interaction.channel, "mention", "DM") if interaction.channel else "DM"
                     embed.add_field(name="Channel", value=channel_info, inline=True)
+                    
+                    if params_str:
+                         embed.add_field(name="Parameters", value=f"`{params_str}`", inline=False)
+                         
                     embed.set_footer(text=f"At {now_str}")
 
                     details = {
@@ -3870,6 +3936,7 @@ async def on_interaction(interaction: discord.Interaction):
                         "user": f"{interaction.user} ({interaction.user.id})",
                         "user_id": interaction.user.id,
                         "command": f"/{cmd_name}",
+                        "params": params_str,
                         "timestamp": now_str,
                     }
                     await send_embed_with_expand(ch, embed, details)
