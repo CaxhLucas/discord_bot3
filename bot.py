@@ -256,14 +256,27 @@ async def send_deleted_message_alert(message: discord.Message, deleter: Optional
             embed_info = ""
             for i, embed_obj in enumerate(message.embeds, 1):
                 title = getattr(embed_obj, 'title', None) or "No title"
-                description = getattr(embed_obj, 'description', None) or "No description"
+                description = getattr(embed_obj, 'description', None) or ""
                 embed_info += f"**Embed {i}:** {title}\n"
-                if description and description != "No description":
+                
+                if description:
                     desc_preview = description[:200] + "..." if len(description) > 200 else description
                     embed_info += f"Description: {desc_preview}\n"
+                
+                # Extract fields
+                if embed_obj.fields:
+                    for f in embed_obj.fields:
+                        name = f.name or "No Name"
+                        value = f.value or "No Value"
+                        embed_info += f"- **{name}**: {value}\n"
+
                 embed_info += "---\n"
+            
             if embed_info:
-                embed.add_field(name="Embed(s) Detected", value=embed_info[:1024], inline=False)
+                # Truncate if exceeding Discord limits (1024 chars for field value)
+                if len(embed_info) > 1024:
+                     embed_info = embed_info[:1021] + "..."
+                embed.add_field(name="Embed(s) Detected", value=embed_info, inline=False)
         
         if message.attachments:
             attachment_list = []
